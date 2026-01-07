@@ -1,0 +1,388 @@
+{
+  description = "Eclipse Platform Releng Aggregator development environment";
+
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    flake-utils.url = "github:numtide/flake-utils";
+  };
+
+  outputs = { self, nixpkgs, flake-utils }:
+    flake-utils.lib.eachDefaultSystem (system:
+      let
+        pkgs = import nixpkgs {
+          inherit system;
+        };
+        # Use Java 24 (or latest available)
+        jdk = pkgs.jdk;
+
+        # Source derivation
+        # Instead of using fetchSubmodules=true (which is slow), we fetch each submodule
+        # separately and combine them together. This is much faster and allows better caching.
+
+        # Main repository (without submodules)
+        mainRepo = pkgs.fetchFromGitHub {
+          owner = "maxeler";
+          repo = "eclipse.platform.releng.aggregator";
+          rev = "e7f40bf9ae1bb249802b16529172ccf3e0dc6357";
+          sha256 = "sha256-3w6sp7zpcA7t4CVKaiVGwqBbXfCqGsVJ4FHr38j176o=";
+        };
+
+        # Individual submodule fetches
+        submodule_eclipse_jdt = pkgs.fetchFromGitHub {
+          owner = "eclipse-jdt";
+          repo = "eclipse.jdt";
+          rev = "fbb19a8ff98e86640b7415d83fc52e91c7ff3e34";
+          sha256 = "sha256-sEkls26kajS0ud2Z09DHWGYOJvuIEhhGjfvKZHFRgTY=";
+        };
+
+        submodule_eclipse_jdt_core = pkgs.fetchFromGitHub {
+          owner = "maxeler";
+          repo = "maxj";
+          rev = "17d543e9fa42c2647716a4842922c8848b8eddf5";
+          sha256 = "sha256-wsauLV3bEu4oExfNr0NWy6bMtlF4oa+xPSW+CGJkViI=";
+        };
+
+        submodule_eclipse_jdt_core_binaries = pkgs.fetchFromGitHub {
+          owner = "eclipse-jdt";
+          repo = "eclipse.jdt.core.binaries";
+          rev = "435d794313ac39ef8e7c3cf93518b773e383a68b";
+          sha256 = "sha256-zbUaHZbiDIWL9v023UyHj5uR9Wn6N5mSqYHs9qqvYlw=";
+        };
+
+        submodule_eclipse_jdt_debug = pkgs.fetchFromGitHub {
+          owner = "eclipse-jdt";
+          repo = "eclipse.jdt.debug";
+          rev = "c3216f8e636eab21d9aedb53becc562f5cee7739";
+          sha256 = "sha256-pymQ5+MNGbb41s/aOAIvhN67Fqi70XH/z8w7se9o/R4=";
+        };
+
+        submodule_eclipse_jdt_ui = pkgs.fetchFromGitHub {
+          owner = "maxeler";
+          repo = "eclipse.jdt.ui";
+          rev = "387bdf958b95ffc7ea8db798a423cc35e386b940";
+          sha256 = "sha256-xUs6RIDZa9oZI5gezziB1LQo9XcTk3LWxWWVyzsvlzQ=";
+        };
+
+        submodule_eclipse_jdt_ls = pkgs.fetchFromGitHub {
+          owner = "maxeler";
+          repo = "eclipse.jdt.ls";
+          rev = "f4dbbf689ce02a5e9cfc9a258ff6ee575554871e";
+          sha256 = "sha256-sEkls26kajS0ud2Z09DHWGYOJvuIEhhGjfvKZHFRgTY=";
+        };
+
+        submodule_eclipse_pde = pkgs.fetchFromGitHub {
+          owner = "eclipse-pde";
+          repo = "eclipse.pde";
+          rev = "bc2f62c776dbccd0932249eda364865c1878c7e9";
+          sha256 = "sha256-E3tJPpDDsUahhk1pMpcWMhnfVrycWL1aFGoSULNa5tM=";
+        };
+
+        submodule_eclipse_platform = pkgs.fetchFromGitHub {
+          owner = "eclipse-platform";
+          repo = "eclipse.platform";
+          rev = "53c100e6cd6fb8fa1af3b101ed16f6c2bdbc6396";
+          sha256 = "sha256-Fhn4mEObjSUetwksUg46qjPU52d1En1T70bkTqWKRdo=";
+        };
+
+        submodule_eclipse_platform_swt = pkgs.fetchFromGitHub {
+          owner = "eclipse-platform";
+          repo = "eclipse.platform.swt";
+          rev = "e4890daf9d8aecbf37ba0e7562ca5066e33ebefd";
+          sha256 = "sha256-jI5ewA8mn7LhZgFDD6JvIhKq8n3Xz16jdVEEhOe4/NI=";
+        };
+
+        submodule_eclipse_platform_ui = pkgs.fetchFromGitHub {
+          owner = "eclipse-platform";
+          repo = "eclipse.platform.ui";
+          rev = "adf7f57615da873b6fbc094d98ccb5ff79ddd99d";
+          sha256 = "sha256-hXh535TU+rtqc27ollQL24nr/5V3O+0Z2zSe4tTtrGI=";
+        };
+
+        submodule_equinox = pkgs.fetchFromGitHub {
+          owner = "eclipse-equinox";
+          repo = "equinox";
+          rev = "ca95c426a7176f95f085f2f08c29f5cc338d9dcb";
+          sha256 = "sha256-42FNMB/w0NJsZlNLG/BQ54dyJiMQ1XIuOdO5ZbaOJtA=";
+        };
+
+        submodule_equinox_binaries = pkgs.fetchFromGitHub {
+          owner = "eclipse-equinox";
+          repo = "equinox.binaries";
+          rev = "a72c123aa956a8ad109f42b2094c9a8ad5212aa4";
+          sha256 = "sha256-P/jRGoUZc3r9kFi1pCWzpfoTqmnywQdwtxjGnapyLG8=";
+        };
+
+        submodule_equinox_p2 = pkgs.fetchFromGitHub {
+          owner = "eclipse-equinox";
+          repo = "p2";
+          rev = "1a09efdb39b2946efbacc281baaee76da8f1c323";
+          sha256 = "sha256-9FqDXLAfMRG2Wk2ejQ1ZEy2EX2PS+1uIfPc+wWyiHgk=";
+        };
+
+        # Combine main repo with all submodules
+        source = pkgs.runCommand "eclipse-platform-releng-aggregator-combined" {} ''
+          # Copy main repository
+          cp -r ${mainRepo} $out
+          chmod -R +w $out
+
+          # Copy each submodule to its designated path
+          cp -r ${submodule_eclipse_jdt} $out/eclipse.jdt
+          cp -r ${submodule_eclipse_jdt_core} $out/eclipse.jdt.core
+          cp -r ${submodule_eclipse_jdt_core_binaries} $out/eclipse.jdt.core.binaries
+          cp -r ${submodule_eclipse_jdt_debug} $out/eclipse.jdt.debug
+          cp -r ${submodule_eclipse_jdt_ui} $out/eclipse.jdt.ui
+          cp -r ${submodule_eclipse_jdt_ls} $out/eclipse.jdt.ls
+          cp -r ${submodule_eclipse_pde} $out/eclipse.pde
+          cp -r ${submodule_eclipse_platform} $out/eclipse.platform
+          cp -r ${submodule_eclipse_platform_swt} $out/eclipse.platform.swt
+          cp -r ${submodule_eclipse_platform_ui} $out/eclipse.platform.ui
+          cp -r ${submodule_equinox} $out/equinox
+          cp -r ${submodule_equinox_binaries} $out/equinox.binaries
+          cp -r ${submodule_equinox_p2} $out/equinox.p2
+        '';
+
+        # ECJ build derivation
+        ecj = pkgs.stdenv.mkDerivation {
+          pname = "eclipse-ecj";
+          version = "3.42.0-SNAPSHOT";
+
+          src = source;
+
+          nativeBuildInputs = with pkgs; [
+            jdk
+            maven
+            git
+            which
+          ];
+
+          # Set up environment variables
+          preBuild = ''
+            export JAVA_HOME=${jdk}
+            export PATH="$JAVA_HOME/bin:$PATH"
+            export MAVEN_OPTS="-Xmx2G"
+            export WORKSPACE=$PWD
+            export M2_REPO=$WORKSPACE/.m2/repository
+
+            # Create minimal git repositories for Tycho build qualifier
+            # Tycho searches upwards from project directories, so we create repos
+            # at the root and in eclipse.jdt.core (where org.eclipse.jdt.core.compiler.batch is)
+            # Using empty commits avoids the slow 'git add .' operation
+            echo "Creating minimal git repositories for Tycho..."
+            git init
+            git config user.email "build@nix"
+            git config user.name "Nix Build"
+            git commit --allow-empty -m "Initial commit for Nix build" || true
+
+            # Create git repo in eclipse.jdt.core (Tycho checks this directory)
+            if [ -d "eclipse.jdt.core" ] && [ ! -d "eclipse.jdt.core/.git" ]; then
+              (cd eclipse.jdt.core && \
+               git init && \
+               git config user.email "build@nix" && \
+               git config user.name "Nix Build" && \
+               git commit --allow-empty -m "Initial commit" || true)
+            fi
+          '';
+
+          buildPhase = ''
+            runHook preBuild
+
+            echo "Building ECJ..."
+            mvn clean install \
+              -pl :eclipse-sdk-prereqs,:org.eclipse.jdt.core.compiler.batch \
+              -DlocalEcjVersion=99.99 \
+              -Dmaven.repo.local=$M2_REPO \
+              -U \
+              -DskipTests=true
+          '';
+
+          installPhase = ''
+            runHook preInstall
+
+            # Find the ECJ jar file
+            ECJ_JAR=$(find eclipse.jdt.core/org.eclipse.jdt.core.compiler.batch/target \
+              -name "org.eclipse.jdt.core.compiler.batch-*-SNAPSHOT.jar" | head -1)
+
+            if [ -z "$ECJ_JAR" ]; then
+              echo "Error: ECJ jar not found!"
+              exit 1
+            fi
+
+            echo "Found ECJ jar: $ECJ_JAR"
+
+            # Install the jar
+            mkdir -p $out/lib
+            cp $ECJ_JAR $out/lib/ecj.jar
+
+            # Also install to a versioned path for reference
+            mkdir -p $out/share/eclipse-ecj
+            cp $ECJ_JAR $out/share/eclipse-ecj/
+
+            # Create a symlink for convenience
+            ln -s $out/lib/ecj.jar $out/ecj.jar
+
+            runHook postInstall
+          '';
+
+          # Don't fail if submodules aren't initialized (for local builds)
+          dontFixup = true;
+        };
+
+        # Eclipse build derivation
+        eclipse = pkgs.stdenv.mkDerivation {
+          pname = "eclipse-platform";
+          version = "4.36.0-SNAPSHOT";
+
+          src = source;
+
+          # Depend on ECJ build - this ensures ECJ is built first
+          # and makes the ECJ path available in the build
+          buildInputs = [ ecj ];
+
+          nativeBuildInputs = with pkgs; [
+            jdk
+            maven
+            git
+            which
+          ];
+
+          preBuild = ''
+            export JAVA_HOME=${jdk}
+            export PATH="$JAVA_HOME/bin:$PATH"
+            export MAVEN_OPTS="-Xmx2G"
+            export WORKSPACE=$PWD
+            export M2_REPO=$WORKSPACE/.m2/repository
+
+            # Create minimal git repositories for Tycho build qualifier
+            # Tycho searches upwards from project directories, so we create repos
+            # at the root and in eclipse.jdt.core (where org.eclipse.jdt.core.compiler.batch is)
+            # Using empty commits avoids the slow 'git add .' operation
+            echo "Creating minimal git repositories for Tycho..."
+            git init
+            git config user.email "build@nix"
+            git config user.name "Nix Build"
+            git commit --allow-empty -m "Initial commit for Nix build" || true
+
+            # Create git repo in eclipse.jdt.core (Tycho checks this directory)
+            if [ -d "eclipse.jdt.core" ] && [ ! -d "eclipse.jdt.core/.git" ]; then
+              (cd eclipse.jdt.core && \
+               git init && \
+               git config user.email "build@nix" && \
+               git config user.name "Nix Build" && \
+               git commit --allow-empty -m "Initial commit" || true)
+            fi
+
+            # Install ECJ with the correct Maven coordinates for Tycho
+            # Tycho compiler plugin needs org.eclipse.jdt:ecj:99.99
+            ECJ_PATH="${ecj}/lib/ecj.jar"
+            if [ -f "$ECJ_PATH" ]; then
+              echo "Installing ECJ to Maven repository with coordinates org.eclipse.jdt:ecj:99.99"
+              # Install as org.eclipse.jdt:ecj:99.99 (required by Tycho compiler plugin)
+              mkdir -p $M2_REPO/org/eclipse/jdt/ecj/99.99
+              cp "$ECJ_PATH" $M2_REPO/org/eclipse/jdt/ecj/99.99/ecj-99.99.jar
+
+              # Also create the POM file for this artifact
+              cat > $M2_REPO/org/eclipse/jdt/ecj/99.99/ecj-99.99.pom <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>org.eclipse.jdt</groupId>
+  <artifactId>ecj</artifactId>
+  <version>99.99</version>
+  <packaging>jar</packaging>
+</project>
+EOF
+
+              # Also install with the original coordinates for compatibility
+              mkdir -p $M2_REPO/org/eclipse/jdt/org.eclipse.jdt.core.compiler.batch/3.42.0-SNAPSHOT
+              cp "$ECJ_PATH" $M2_REPO/org/eclipse/jdt/org.eclipse.jdt.core.compiler.batch/3.42.0-SNAPSHOT/org.eclipse.jdt.core.compiler.batch-3.42.0-SNAPSHOT.jar
+            else
+              echo "Error: ECJ not found at $ECJ_PATH"
+              echo "Building ECJ first..."
+              mvn clean install \
+                -pl :eclipse-sdk-prereqs,:org.eclipse.jdt.core.compiler.batch \
+                -DlocalEcjVersion=99.99 \
+                -Dmaven.repo.local=$M2_REPO \
+                -U \
+                -DskipTests=true
+            fi
+          '';
+
+          buildPhase = ''
+            runHook preBuild
+
+            echo "Building Eclipse Platform..."
+            mvn clean verify \
+              -e \
+              -Dmaven.repo.local=$M2_REPO \
+              -T 1C \
+              -DskipTests=true \
+              -Dcompare-version-with-baselines.skip=true \
+              -DapiBaselineTargetDirectory=$WORKSPACE \
+              -Dcbi-ecj-version=99.99 \
+              -Dtycho.disableP2Mirrors=true \
+              -U
+          '';
+
+          installPhase = ''
+            runHook preInstall
+
+            # Find the distribution builds
+            DIST_DIR=eclipse.platform.releng.tychoeclipsebuilder/eclipse.platform.repository/target/products
+
+            if [ ! -d "$DIST_DIR" ]; then
+              echo "Error: Distribution directory not found: $DIST_DIR"
+              exit 1
+            fi
+
+            echo "Installing Eclipse distributions..."
+            mkdir -p $out/distributions
+            cp -r $DIST_DIR/* $out/distributions/
+
+            # Create symlinks for the most relevant distributions
+            if [ -f "$out/distributions/org.eclipse.sdk.ide-macosx.cocoa.aarch64.tar.gz" ]; then
+              ln -s $out/distributions/org.eclipse.sdk.ide-macosx.cocoa.aarch64.tar.gz \
+                $out/eclipse-sdk-macos-aarch64.tar.gz
+            fi
+
+            if [ -f "$out/distributions/org.eclipse.sdk.ide-linux.gtk.x86_64.tar.gz" ]; then
+              ln -s $out/distributions/org.eclipse.sdk.ide-linux.gtk.x86_64.tar.gz \
+                $out/eclipse-sdk-linux-x86_64.tar.gz
+            fi
+
+            runHook postInstall
+          '';
+
+          # Don't fail if submodules aren't initialized (for local builds)
+          dontFixup = true;
+        };
+
+      in
+      {
+        devShells.default = pkgs.mkShell {
+          buildInputs = with pkgs; [
+            jdk
+            maven
+            git
+          ];
+
+          shellHook = ''
+            export JAVA_HOME=${jdk}
+            export PATH="$JAVA_HOME/bin:$PATH"
+            echo "Java version:"
+            java -version
+            echo ""
+            echo "Maven version:"
+            mvn -version
+          '';
+        };
+
+        packages = {
+          ecj = ecj;
+          eclipse = eclipse;
+          default = eclipse;
+        };
+      }
+    );
+}
