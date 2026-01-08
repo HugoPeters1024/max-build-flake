@@ -767,25 +767,34 @@ if [ ! -d "''${WRITABLE_CONFIG_DIR}" ] || [ "''${SOURCE_CONFIG_DIR}" -nt "''${WR
     # Copy all config files, preserving structure
     if [ -d "''${SOURCE_CONFIG_DIR}" ]; then
         cp -r "''${SOURCE_CONFIG_DIR}"/* "''${WRITABLE_CONFIG_DIR}/" 2>/dev/null || true
-        # Clean up config.ini to fix paths and remove problematic references
-        if [ -f "''${WRITABLE_CONFIG_DIR}/config.ini" ]; then
-            TMP_FILE="''${WRITABLE_CONFIG_DIR}/config.ini.tmp"
-            # Remove osgi.framework.extensions line (causes issues with missing compatibility state plugin)
-            # Remove any lines referencing org.eclipse.osgi.compatibility.state
-            # Note: osgi.framework path is relative to osgi.install.area, so plugins/... should work
-            # But we'll remove the problematic extensions line
-            grep -v '^osgi.framework.extensions=' "''${WRITABLE_CONFIG_DIR}/config.ini" | \
-            grep -v 'org.eclipse.osgi.compatibility.state' > "''${TMP_FILE}" 2>/dev/null && \
-            mv "''${TMP_FILE}" "''${WRITABLE_CONFIG_DIR}/config.ini" 2>/dev/null || true
-        fi
-        # Remove references from any other .ini files
-        find "''${WRITABLE_CONFIG_DIR}" -name "*.ini" -type f ! -name "config.ini" | while read ini_file; do
-            TMP_FILE="''${ini_file}.tmp"
-            sed '/org.eclipse.osgi.compatibility.state/d' "''${ini_file}" > "''${TMP_FILE}" 2>/dev/null && \
-            mv "''${TMP_FILE}" "''${ini_file}" 2>/dev/null || true
-        done
     fi
 fi
+
+# Always clean up config.ini (even if directory wasn't recreated, to handle cached configs)
+# This ensures we remove problematic references every time the script runs
+if [ -f "''${WRITABLE_CONFIG_DIR}/config.ini" ]; then
+    TMP_FILE="''${WRITABLE_CONFIG_DIR}/config.ini.tmp"
+    # Remove osgi.framework.extensions line (causes issues with missing compatibility state plugin)
+    # Remove any lines referencing org.eclipse.osgi.compatibility.state
+    # Use awk to reliably handle the file (handles escaped characters better than grep)
+    awk '!/^osgi\.framework\.extensions=/ && !/org\.eclipse\.osgi\.compatibility\.state/' "''${WRITABLE_CONFIG_DIR}/config.ini" > "''${TMP_FILE}" 2>/dev/null
+    if [ -f "''${TMP_FILE}" ] && [ -s "''${TMP_FILE}" ]; then
+        mv "''${TMP_FILE}" "''${WRITABLE_CONFIG_DIR}/config.ini"
+    else
+        rm -f "''${TMP_FILE}"
+    fi
+fi
+
+# Remove references from any other .ini files
+find "''${WRITABLE_CONFIG_DIR}" -name "*.ini" -type f ! -name "config.ini" 2>/dev/null | while read ini_file; do
+    TMP_FILE="''${ini_file}.tmp"
+    awk '!/org\.eclipse\.osgi\.compatibility\.state/' "''${ini_file}" > "''${TMP_FILE}" 2>/dev/null
+    if [ -f "''${TMP_FILE}" ] && [ -s "''${TMP_FILE}" ]; then
+        mv "''${TMP_FILE}" "''${ini_file}"
+    else
+        rm -f "''${TMP_FILE}"
+    fi
+done
 
 # Use the writable config directory
 CONFIG_DIR="''${WRITABLE_CONFIG_DIR}"
