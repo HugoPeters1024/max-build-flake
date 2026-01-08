@@ -678,6 +678,36 @@ SCRIPT_EOF
             mkdir -p $out/repository
             cp -r $REPO_SOURCE/* $out/repository/
 
+            # Check if org.eclipse.osgi.compatibility.state plugin exists, if not create a minimal stub
+            if ! find "$out/repository/plugins" -name "org.eclipse.osgi.compatibility.state_*.jar" | grep -q .; then
+              echo "Creating minimal stub for missing org.eclipse.osgi.compatibility.state plugin..."
+              STUB_JAR="$out/repository/plugins/org.eclipse.osgi.compatibility.state_1.2.1200.v20260108-0928.jar"
+              STUB_DIR=$(mktemp -d)
+              mkdir -p "$STUB_DIR/META-INF"
+              # Create a minimal valid OSGi bundle manifest (no activator needed)
+              cat > "$STUB_DIR/META-INF/MANIFEST.MF" <<'MANIFEST_EOF'
+Manifest-Version: 1.0
+Bundle-ManifestVersion: 2
+Bundle-Name: OSGi Compatibility State
+Bundle-SymbolicName: org.eclipse.osgi.compatibility.state
+Bundle-Version: 1.2.1200.v20260108-0928
+MANIFEST_EOF
+              # Create minimal JAR with just the manifest
+              # jar should be in PATH since jdk is in buildInputs
+              (cd "$STUB_DIR" && jar cf "$STUB_JAR" META-INF/ 2>/dev/null || {
+                echo "Warning: Could not create stub JAR using jar command, trying alternative..." >&2
+                # Fallback: try using zip (JAR files are ZIP files)
+                if command -v zip >/dev/null 2>&1; then
+                  (cd "$STUB_DIR" && zip -q "$STUB_JAR" META-INF/MANIFEST.MF 2>/dev/null && echo "Created stub using zip")
+                else
+                  echo "Error: Neither jar nor zip available to create stub plugin" >&2
+                  exit 1
+                fi
+              })
+              rm -rf "$STUB_DIR"
+              echo "Created stub plugin: $STUB_JAR"
+            fi
+
             # Create the jdtls wrapper script
             mkdir -p $out/bin
             cat > $out/bin/jdtls <<'SCRIPT_EOF'
@@ -730,15 +760,20 @@ if [ ! -d "''${WRITABLE_CONFIG_DIR}" ] || [ "''${SOURCE_CONFIG_DIR}" -nt "''${WR
     # Copy all config files, preserving structure
     if [ -d "''${SOURCE_CONFIG_DIR}" ]; then
         cp -r "''${SOURCE_CONFIG_DIR}"/* "''${WRITABLE_CONFIG_DIR}/" 2>/dev/null || true
-        # Clean up config.ini to remove references to missing plugins if needed
-        if [ -f "''${WRITABLE_CONFIG_DIR}/config.ini" ]; then
-            # Remove lines referencing org.eclipse.osgi.compatibility.state if the plugin doesn't exist
-            if ! find "''${REPO_DIR}/plugins" -name "org.eclipse.osgi.compatibility.state_*.jar" | grep -q .; then
-                # Use a temporary file approach that works on both macOS and Linux
+        # Clean up all config files to remove references to missing plugins
+        if ! find "''${REPO_DIR}/plugins" -name "org.eclipse.osgi.compatibility.state_*.jar" | grep -q .; then
+            # Remove references from config.ini
+            if [ -f "''${WRITABLE_CONFIG_DIR}/config.ini" ]; then
                 TMP_FILE="''${WRITABLE_CONFIG_DIR}/config.ini.tmp"
                 sed '/org.eclipse.osgi.compatibility.state/d' "''${WRITABLE_CONFIG_DIR}/config.ini" > "''${TMP_FILE}" 2>/dev/null && \
                 mv "''${TMP_FILE}" "''${WRITABLE_CONFIG_DIR}/config.ini" 2>/dev/null || true
             fi
+            # Remove references from any other .ini files
+            find "''${WRITABLE_CONFIG_DIR}" -name "*.ini" -type f | while read ini_file; do
+                TMP_FILE="''${ini_file}.tmp"
+                sed '/org.eclipse.osgi.compatibility.state/d' "''${ini_file}" > "''${TMP_FILE}" 2>/dev/null && \
+                mv "''${TMP_FILE}" "''${ini_file}" 2>/dev/null || true
+            done
         fi
     fi
 fi
@@ -759,6 +794,8 @@ exec @java@/bin/java \
   -Declipse.product=org.eclipse.jdt.ls.core.product \
   -Dosgi.checkConfiguration=false \
   -Dosgi.compatibility.bootdelegation=true \
+  -Dosgi.ignoreExtension=true \
+  -Dosgi.framework.extensions= \
   -Dlog.level=ALL \
   -Xmx1G \
   --add-modules=ALL-SYSTEM \
