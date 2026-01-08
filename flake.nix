@@ -737,11 +737,14 @@ if [ ! -d "''${WRITABLE_CONFIG_DIR}" ] || [ "''${SOURCE_CONFIG_DIR}" -nt "''${WR
     fi
 fi
 
-# Always remove osgi.framework.extensions line (even if config wasn't just copied)
+# Always remove osgi.framework.extensions line and fix osgi.framework path (even if config wasn't just copied)
 # This ensures cached configs are also cleaned up
 if [ -f "''${WRITABLE_CONFIG_DIR}/config.ini" ]; then
     TMP_FILE="''${WRITABLE_CONFIG_DIR}/config.ini.tmp"
-    sed '/^osgi\.framework\.extensions=/d' "''${WRITABLE_CONFIG_DIR}/config.ini" > "''${TMP_FILE}" 2>/dev/null && \
+    # Remove osgi.framework.extensions line and ensure osgi.framework uses absolute path
+    sed -e '/^osgi\.framework\.extensions=/d' \
+        -e "s|^osgi\.framework=file\\\\:plugins/|osgi.framework=file:''${REPO_DIR}/plugins/|g" \
+        "''${WRITABLE_CONFIG_DIR}/config.ini" > "''${TMP_FILE}" 2>/dev/null && \
     mv "''${TMP_FILE}" "''${WRITABLE_CONFIG_DIR}/config.ini" 2>/dev/null || true
 fi
 
