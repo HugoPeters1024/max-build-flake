@@ -730,6 +730,16 @@ if [ ! -d "''${WRITABLE_CONFIG_DIR}" ] || [ "''${SOURCE_CONFIG_DIR}" -nt "''${WR
     # Copy all config files, preserving structure
     if [ -d "''${SOURCE_CONFIG_DIR}" ]; then
         cp -r "''${SOURCE_CONFIG_DIR}"/* "''${WRITABLE_CONFIG_DIR}/" 2>/dev/null || true
+        # Clean up config.ini to remove references to missing plugins if needed
+        if [ -f "''${WRITABLE_CONFIG_DIR}/config.ini" ]; then
+            # Remove lines referencing org.eclipse.osgi.compatibility.state if the plugin doesn't exist
+            if ! find "''${REPO_DIR}/plugins" -name "org.eclipse.osgi.compatibility.state_*.jar" | grep -q .; then
+                # Use a temporary file approach that works on both macOS and Linux
+                TMP_FILE="''${WRITABLE_CONFIG_DIR}/config.ini.tmp"
+                sed '/org.eclipse.osgi.compatibility.state/d' "''${WRITABLE_CONFIG_DIR}/config.ini" > "''${TMP_FILE}" 2>/dev/null && \
+                mv "''${TMP_FILE}" "''${WRITABLE_CONFIG_DIR}/config.ini" 2>/dev/null || true
+            fi
+        fi
     fi
 fi
 
@@ -747,6 +757,8 @@ exec @java@/bin/java \
   -Declipse.application=org.eclipse.jdt.ls.core.id1 \
   -Dosgi.bundles.defaultStartLevel=4 \
   -Declipse.product=org.eclipse.jdt.ls.core.product \
+  -Dosgi.checkConfiguration=false \
+  -Dosgi.compatibility.bootdelegation=true \
   -Dlog.level=ALL \
   -Xmx1G \
   --add-modules=ALL-SYSTEM \
