@@ -758,6 +758,7 @@ esac
 
 # Create a writable configuration directory in /tmp
 # Use a user-specific directory to avoid conflicts
+# Note: REPO_DIR_ABS will be set below, but we need this here, so use REPO_DIR for the hash
 WRITABLE_CONFIG_DIR="/tmp/jdtls-config-''${USER:-nix}-$(basename "''${REPO_DIR}" | cut -d'-' -f1)"
 
 # Copy configuration from Nix store to writable location if needed
@@ -766,28 +767,23 @@ if [ ! -d "''${WRITABLE_CONFIG_DIR}" ] || [ "''${SOURCE_CONFIG_DIR}" -nt "''${WR
     # Copy all config files, preserving structure
     if [ -d "''${SOURCE_CONFIG_DIR}" ]; then
         cp -r "''${SOURCE_CONFIG_DIR}"/* "''${WRITABLE_CONFIG_DIR}/" 2>/dev/null || true
-        # Clean up all config files to remove references to missing plugins
-        if ! find "''${REPO_DIR_ABS}/plugins" -name "org.eclipse.osgi.compatibility.state_*.jar" | grep -q .; then
-            # Remove references from config.ini
-            if [ -f "''${WRITABLE_CONFIG_DIR}/config.ini" ]; then
-                TMP_FILE="''${WRITABLE_CONFIG_DIR}/config.ini.tmp"
-                sed '/org.eclipse.osgi.compatibility.state/d' "''${WRITABLE_CONFIG_DIR}/config.ini" > "''${TMP_FILE}" 2>/dev/null && \
-                mv "''${TMP_FILE}" "''${WRITABLE_CONFIG_DIR}/config.ini" 2>/dev/null || true
-            fi
-            # Remove references from any other .ini files
-            find "''${WRITABLE_CONFIG_DIR}" -name "*.ini" -type f | while read ini_file; do
-                TMP_FILE="''${ini_file}.tmp"
-                sed '/org.eclipse.osgi.compatibility.state/d' "''${ini_file}" > "''${TMP_FILE}" 2>/dev/null && \
-                mv "''${TMP_FILE}" "''${ini_file}" 2>/dev/null || true
-            done
-        fi
-        # Ensure config.ini uses absolute paths for osgi.install.area if it exists
+        # Clean up config.ini to fix paths and remove problematic references
         if [ -f "''${WRITABLE_CONFIG_DIR}/config.ini" ]; then
-            # Update osgi.install.area to use absolute path if it's relative
             TMP_FILE="''${WRITABLE_CONFIG_DIR}/config.ini.tmp"
-            sed "s|osgi.install.area=@config.dir|osgi.install.area=file:''${REPO_DIR_ABS}/|g" "''${WRITABLE_CONFIG_DIR}/config.ini" > "''${TMP_FILE}" 2>/dev/null && \
+            # Remove osgi.framework.extensions line (causes issues with missing compatibility state plugin)
+            # Remove any lines referencing org.eclipse.osgi.compatibility.state
+            # Note: osgi.framework path is relative to osgi.install.area, so plugins/... should work
+            # But we'll remove the problematic extensions line
+            grep -v '^osgi.framework.extensions=' "''${WRITABLE_CONFIG_DIR}/config.ini" | \
+            grep -v 'org.eclipse.osgi.compatibility.state' > "''${TMP_FILE}" 2>/dev/null && \
             mv "''${TMP_FILE}" "''${WRITABLE_CONFIG_DIR}/config.ini" 2>/dev/null || true
         fi
+        # Remove references from any other .ini files
+        find "''${WRITABLE_CONFIG_DIR}" -name "*.ini" -type f ! -name "config.ini" | while read ini_file; do
+            TMP_FILE="''${ini_file}.tmp"
+            sed '/org.eclipse.osgi.compatibility.state/d' "''${ini_file}" > "''${TMP_FILE}" 2>/dev/null && \
+            mv "''${TMP_FILE}" "''${ini_file}" 2>/dev/null || true
+        done
     fi
 fi
 
