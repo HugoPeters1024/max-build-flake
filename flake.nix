@@ -724,29 +724,35 @@ if [ ! -d "''${REPO_DIR}" ]; then
     exit 1
 fi
 
-# Find the equinox launcher jar
-LAUNCHER_JAR=$(find "''${REPO_DIR}/plugins" -name "org.eclipse.equinox.launcher_*.jar" | head -1)
+# Ensure we have absolute paths first
+REPO_DIR_ABS="$(cd "''${REPO_DIR}" && pwd)"
+
+# Find the equinox launcher jar using absolute path
+LAUNCHER_JAR=$(find "''${REPO_DIR_ABS}/plugins" -name "org.eclipse.equinox.launcher_*.jar" | head -1)
 
 if [ -z "''${LAUNCHER_JAR}" ]; then
-    echo "Error: Equinox launcher jar not found in ''${REPO_DIR}/plugins"
+    echo "Error: Equinox launcher jar not found in ''${REPO_DIR_ABS}/plugins"
     exit 1
 fi
+
+# Make launcher jar path absolute
+LAUNCHER_JAR="$(cd "$(dirname "''${LAUNCHER_JAR}")" && pwd)/$(basename "''${LAUNCHER_JAR}")"
 
 # Detect OS and set source configuration directory (in Nix store)
 OS=$(uname -s)
 case "''${OS}" in
     Linux*)
-        SOURCE_CONFIG_DIR="''${REPO_DIR}/config_linux"
+        SOURCE_CONFIG_DIR="''${REPO_DIR_ABS}/config_linux"
         ;;
     Darwin*)
-        SOURCE_CONFIG_DIR="''${REPO_DIR}/config_mac"
+        SOURCE_CONFIG_DIR="''${REPO_DIR_ABS}/config_mac"
         ;;
     MINGW*|MSYS*|CYGWIN*)
-        SOURCE_CONFIG_DIR="''${REPO_DIR}/config_win"
+        SOURCE_CONFIG_DIR="''${REPO_DIR_ABS}/config_win"
         ;;
     *)
         echo "Warning: Unknown OS ''${OS}, using config_linux"
-        SOURCE_CONFIG_DIR="''${REPO_DIR}/config_linux"
+        SOURCE_CONFIG_DIR="''${REPO_DIR_ABS}/config_linux"
         ;;
 esac
 
@@ -761,7 +767,7 @@ if [ ! -d "''${WRITABLE_CONFIG_DIR}" ] || [ "''${SOURCE_CONFIG_DIR}" -nt "''${WR
     if [ -d "''${SOURCE_CONFIG_DIR}" ]; then
         cp -r "''${SOURCE_CONFIG_DIR}"/* "''${WRITABLE_CONFIG_DIR}/" 2>/dev/null || true
         # Clean up all config files to remove references to missing plugins
-        if ! find "''${REPO_DIR}/plugins" -name "org.eclipse.osgi.compatibility.state_*.jar" | grep -q .; then
+        if ! find "''${REPO_DIR_ABS}/plugins" -name "org.eclipse.osgi.compatibility.state_*.jar" | grep -q .; then
             # Remove references from config.ini
             if [ -f "''${WRITABLE_CONFIG_DIR}/config.ini" ]; then
                 TMP_FILE="''${WRITABLE_CONFIG_DIR}/config.ini.tmp"
@@ -775,6 +781,13 @@ if [ ! -d "''${WRITABLE_CONFIG_DIR}" ] || [ "''${SOURCE_CONFIG_DIR}" -nt "''${WR
                 mv "''${TMP_FILE}" "''${ini_file}" 2>/dev/null || true
             done
         fi
+        # Ensure config.ini uses absolute paths for osgi.install.area if it exists
+        if [ -f "''${WRITABLE_CONFIG_DIR}/config.ini" ]; then
+            # Update osgi.install.area to use absolute path if it's relative
+            TMP_FILE="''${WRITABLE_CONFIG_DIR}/config.ini.tmp"
+            sed "s|osgi.install.area=@config.dir|osgi.install.area=file:''${REPO_DIR_ABS}/|g" "''${WRITABLE_CONFIG_DIR}/config.ini" > "''${TMP_FILE}" 2>/dev/null && \
+            mv "''${TMP_FILE}" "''${WRITABLE_CONFIG_DIR}/config.ini" 2>/dev/null || true
+        fi
     fi
 fi
 
@@ -784,14 +797,57 @@ CONFIG_DIR="''${WRITABLE_CONFIG_DIR}"
 # Set data directory (default to /tmp/jdtls-data if not provided)
 DATA_DIR="''${1:-/tmp/jdtls-data}"
 
+# Verify plugins directory exists
+PLUGINS_DIR_ABS="''${REPO_DIR_ABS}/plugins"
+if [ ! -d "''${PLUGINS_DIR_ABS}" ]; then
+    echo "Error: Plugins directory not found at ''${PLUGINS_DIR_ABS}"
+    exit 1
+fi
+
+# Verify critical plugins exist
+if [ ! -f "''${LAUNCHER_JAR}" ]; then
+    echo "Error: Launcher jar not found at ''${LAUNCHER_JAR}"
+    exit 1
+fi
+
+# Check for org.eclipse.osgi bundle (required for runtime)
+OSGI_BUNDLE=$(find "''${PLUGINS_DIR_ABS}" -name "org.eclipse.osgi_*.jar" | head -1)
+if [ -z "''${OSGI_BUNDLE}" ]; then
+    echo "Error: org.eclipse.osgi bundle not found in plugins directory - this is required!"
+    echo "Available plugins:"
+    ls "''${PLUGINS_DIR_ABS}" | head -20
+    exit 1
+fi
+
+# Extract OSGi bundle name for osgi.bundles property
+OSGI_BUNDLE_NAME=$(basename "''${OSGI_BUNDLE}")
+OSGI_BUNDLE_NAME_NO_EXT="''${OSGI_BUNDLE_NAME%.jar}"
+
+# Debug output (can be removed later)
+if [ "''${JDTLS_DEBUG:-}" = "1" ]; then
+    echo "Debug: REPO_DIR_ABS=''${REPO_DIR_ABS}"
+    echo "Debug: PLUGINS_DIR_ABS=''${PLUGINS_DIR_ABS}"
+    echo "Debug: LAUNCHER_JAR=''${LAUNCHER_JAR}"
+    echo "Debug: OSGI_BUNDLE=''${OSGI_BUNDLE}"
+    echo "Debug: CONFIG_DIR=''${CONFIG_DIR}"
+    echo "Debug: DATA_DIR=''${DATA_DIR}"
+    echo "Debug: Current directory: $(pwd)"
+    echo "Debug: Plugins count: $(ls "''${PLUGINS_DIR_ABS}" | wc -l)"
+fi
+
 # Change to repository directory so relative paths work
-cd "''${REPO_DIR}"
+cd "''${REPO_DIR_ABS}"
 
 # Run the language server
+# Note: osgi.bundles property can specify bundles to start, but if not set,
+# Equinox will auto-discover bundles from the plugins directory
 exec @java@/bin/java \
   -Declipse.application=org.eclipse.jdt.ls.core.id1 \
   -Dosgi.bundles.defaultStartLevel=4 \
   -Declipse.product=org.eclipse.jdt.ls.core.product \
+  -Dosgi.install.area="file:''${REPO_DIR_ABS}/" \
+  -Dosgi.instance.area="file:''${DATA_DIR}/" \
+  -Dosgi.configuration.area="file:''${CONFIG_DIR}/" \
   -Dosgi.checkConfiguration=false \
   -Dosgi.compatibility.bootdelegation=true \
   -Dosgi.ignoreExtension=true \
@@ -802,8 +858,8 @@ exec @java@/bin/java \
   --add-opens java.base/java.util=ALL-UNNAMED \
   --add-opens java.base/java.lang=ALL-UNNAMED \
   -jar "''${LAUNCHER_JAR}" \
-  -configuration "''${CONFIG_DIR}" \
-  -data "''${DATA_DIR}"
+  -configuration "file:''${CONFIG_DIR}" \
+  -data "file:''${DATA_DIR}"
 SCRIPT_EOF
 
             # Substitute Java path in the script
