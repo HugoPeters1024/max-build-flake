@@ -819,6 +819,16 @@ if [ -z "''${OSGI_BUNDLE}" ]; then
     exit 1
 fi
 
+# Check for org.eclipse.core.runtime bundle (contains EclipseStarter)
+CORE_RUNTIME_BUNDLE=$(find "''${PLUGINS_DIR_ABS}" -name "org.eclipse.core.runtime_*.jar" | head -1)
+if [ -z "''${CORE_RUNTIME_BUNDLE}" ]; then
+    echo "Error: org.eclipse.core.runtime bundle not found in plugins directory - this is required!"
+    echo "This bundle contains EclipseStarter class needed by the launcher."
+    echo "Available plugins:"
+    ls "''${PLUGINS_DIR_ABS}" | grep -E "(core|runtime|osgi)" | head -20
+    exit 1
+fi
+
 # Extract OSGi bundle name for osgi.bundles property
 OSGI_BUNDLE_NAME=$(basename "''${OSGI_BUNDLE}")
 OSGI_BUNDLE_NAME_NO_EXT="''${OSGI_BUNDLE_NAME%.jar}"
@@ -838,10 +848,15 @@ fi
 # Change to repository directory so relative paths work
 cd "''${REPO_DIR_ABS}"
 
-# Run the language server
-# Note: osgi.bundles property can specify bundles to start, but if not set,
-# Equinox will auto-discover bundles from the plugins directory
-exec @java@/bin/java \
+# Debug: Show config.ini contents if debug is enabled
+if [ "''${JDTLS_DEBUG:-}" = "1" ] && [ -f "''${CONFIG_DIR}/config.ini" ]; then
+    echo "Debug: config.ini contents:"
+    cat "''${CONFIG_DIR}/config.ini" | head -30
+    echo ""
+fi
+
+# Run the language server using -jar (standard Equinox launcher invocation)
+@java@/bin/java \
   -Declipse.application=org.eclipse.jdt.ls.core.id1 \
   -Dosgi.bundles.defaultStartLevel=4 \
   -Declipse.product=org.eclipse.jdt.ls.core.product \
@@ -858,8 +873,25 @@ exec @java@/bin/java \
   --add-opens java.base/java.util=ALL-UNNAMED \
   --add-opens java.base/java.lang=ALL-UNNAMED \
   -jar "''${LAUNCHER_JAR}" \
-  -configuration "file:''${CONFIG_DIR}" \
-  -data "file:''${DATA_DIR}"
+  -configuration "''${CONFIG_DIR}" \
+  -data "''${DATA_DIR}" \
+  2>&1 || {
+    EXIT_CODE=$?
+    echo ""
+    echo "JDTLS failed with exit code $EXIT_CODE"
+    echo "Check the log file for details:"
+    # Find the most recent log file
+    LATEST_LOG=$(ls -t "''${CONFIG_DIR}"/*.log 2>/dev/null | head -1)
+    if [ -n "''${LATEST_LOG}" ] && [ -f "''${LATEST_LOG}" ]; then
+        echo "Log file: ''${LATEST_LOG}"
+        echo ""
+        echo "Last 50 lines of log:"
+        tail -50 "''${LATEST_LOG}"
+    else
+        echo "No log file found in ''${CONFIG_DIR}"
+    fi
+    exit $EXIT_CODE
+}
 SCRIPT_EOF
 
             # Substitute Java path in the script
