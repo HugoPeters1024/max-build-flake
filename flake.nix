@@ -121,24 +121,52 @@
 
         # Combine main repo with all submodules
         source = pkgs.runCommand "eclipse-platform-releng-aggregator-combined" {} ''
-          # Copy main repository
-          cp -r ${mainRepo} $out
+          # Create output directory first
+          mkdir -p $out
+          
+          # Copy main repository (including hidden files)
+          cp -r ${mainRepo}/* $out/ 2>/dev/null || true
+          cp -r ${mainRepo}/.[!.]* $out/ 2>/dev/null || true
           chmod -R +w $out
 
           # Copy each submodule to its designated path
-          cp -r ${submodule_eclipse_jdt} $out/eclipse.jdt
-          cp -r ${submodule_eclipse_jdt_core} $out/eclipse.jdt.core
-          cp -r ${submodule_eclipse_jdt_core_binaries} $out/eclipse.jdt.core.binaries
-          cp -r ${submodule_eclipse_jdt_debug} $out/eclipse.jdt.debug
-          cp -r ${submodule_eclipse_jdt_ui} $out/eclipse.jdt.ui
-          cp -r ${submodule_eclipse_jdt_ls} $out/eclipse.jdt.ls
-          cp -r ${submodule_eclipse_pde} $out/eclipse.pde
-          cp -r ${submodule_eclipse_platform} $out/eclipse.platform
-          cp -r ${submodule_eclipse_platform_swt} $out/eclipse.platform.swt
-          cp -r ${submodule_eclipse_platform_ui} $out/eclipse.platform.ui
-          cp -r ${submodule_equinox} $out/equinox
-          cp -r ${submodule_equinox_binaries} $out/equinox.binaries
-          cp -r ${submodule_equinox_p2} $out/equinox.p2
+          # Explicitly create directories and copy contents to avoid issues on
+          # case-sensitive filesystems and ensure proper structure
+          copy_submodule() {
+            local src="$1"
+            local dst="$2"
+            local skip_pom_check="$3"
+            mkdir -p "$dst"
+            # Copy all files including hidden ones
+            cp -r "$src"/* "$dst/" 2>/dev/null || true
+            cp -r "$src"/.[!.]* "$dst/" 2>/dev/null || true
+            # Verify pom.xml exists (unless skipped for binaries repositories)
+            if [ "$skip_pom_check" != "true" ] && [ ! -f "$dst/pom.xml" ]; then
+              echo "ERROR: Missing pom.xml in $dst" >&2
+              echo "Source: $src" >&2
+              echo "Destination contents:" >&2
+              ls -la "$dst/" >&2 || echo "Directory does not exist!" >&2
+              echo "Source contents:" >&2
+              ls -la "$src/" >&2 || echo "Source does not exist!" >&2
+              exit 1
+            fi
+          }
+
+          copy_submodule ${submodule_eclipse_jdt} $out/eclipse.jdt
+          copy_submodule ${submodule_eclipse_jdt_core} $out/eclipse.jdt.core
+          copy_submodule ${submodule_eclipse_jdt_core_binaries} $out/eclipse.jdt.core.binaries
+          copy_submodule ${submodule_eclipse_jdt_debug} $out/eclipse.jdt.debug
+          copy_submodule ${submodule_eclipse_jdt_ui} $out/eclipse.jdt.ui
+          copy_submodule ${submodule_eclipse_jdt_ls} $out/eclipse.jdt.ls
+          copy_submodule ${submodule_eclipse_pde} $out/eclipse.pde
+          copy_submodule ${submodule_eclipse_platform} $out/eclipse.platform
+          copy_submodule ${submodule_eclipse_platform_swt} $out/eclipse.platform.swt
+          copy_submodule ${submodule_eclipse_platform_ui} $out/eclipse.platform.ui
+          copy_submodule ${submodule_equinox} $out/equinox
+          copy_submodule ${submodule_equinox_binaries} $out/equinox.binaries true
+          copy_submodule ${submodule_equinox_p2} $out/equinox.p2
+
+          echo "Successfully combined all submodules"
         '';
 
         # ECJ build derivation
