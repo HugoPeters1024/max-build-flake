@@ -16,130 +16,14 @@
         jdk = pkgs.jdk;
 
         # Source derivation
-        # Instead of using fetchSubmodules=true (which is slow), we fetch each submodule
-        # separately and combine them together. This is much faster and allows better caching.
-
-        # Main repository (without submodules)
-        mainRepo = pkgs.fetchFromGitHub {
+        # Clone the aggregator repo with submodules enabled
+        source = pkgs.fetchFromGitHub {
           owner = "maxeler";
           repo = "eclipse.platform.releng.aggregator";
           rev = "e7f40bf9ae1bb249802b16529172ccf3e0dc6357";
           sha256 = "sha256-3w6sp7zpcA7t4CVKaiVGwqBbXfCqGsVJ4FHr38j176o=";
+          fetchSubmodules = true;
         };
-
-        # Individual submodule fetches
-        submodule_eclipse_jdt = pkgs.fetchFromGitHub {
-          owner = "eclipse-jdt";
-          repo = "eclipse.jdt";
-          rev = "fbb19a8ff98e86640b7415d83fc52e91c7ff3e34";
-          sha256 = "sha256-sEkls26kajS0ud2Z09DHWGYOJvuIEhhGjfvKZHFRgTY=";
-        };
-
-        submodule_eclipse_jdt_core = pkgs.fetchFromGitHub {
-          owner = "maxeler";
-          repo = "maxj";
-          rev = "17d543e9fa42c2647716a4842922c8848b8eddf5";
-          sha256 = "sha256-wsauLV3bEu4oExfNr0NWy6bMtlF4oa+xPSW+CGJkViI=";
-        };
-
-        submodule_eclipse_jdt_core_binaries = pkgs.fetchFromGitHub {
-          owner = "eclipse-jdt";
-          repo = "eclipse.jdt.core.binaries";
-          rev = "435d794313ac39ef8e7c3cf93518b773e383a68b";
-          sha256 = "sha256-zbUaHZbiDIWL9v023UyHj5uR9Wn6N5mSqYHs9qqvYlw=";
-        };
-
-        submodule_eclipse_jdt_debug = pkgs.fetchFromGitHub {
-          owner = "eclipse-jdt";
-          repo = "eclipse.jdt.debug";
-          rev = "c3216f8e636eab21d9aedb53becc562f5cee7739";
-          sha256 = "sha256-pymQ5+MNGbb41s/aOAIvhN67Fqi70XH/z8w7se9o/R4=";
-        };
-
-        submodule_eclipse_jdt_ui = pkgs.fetchFromGitHub {
-          owner = "maxeler";
-          repo = "eclipse.jdt.ui";
-          rev = "387bdf958b95ffc7ea8db798a423cc35e386b940";
-          sha256 = "sha256-xUs6RIDZa9oZI5gezziB1LQo9XcTk3LWxWWVyzsvlzQ=";
-        };
-
-        submodule_eclipse_jdt_ls = pkgs.fetchFromGitHub {
-          owner = "maxeler";
-          repo = "eclipse.jdt.ls";
-          rev = "f4dbbf689ce02a5e9cfc9a258ff6ee575554871e";
-          sha256 = "sha256-sEkls26kajS0ud2Z09DHWGYOJvuIEhhGjfvKZHFRgTY=";
-        };
-
-        submodule_eclipse_pde = pkgs.fetchFromGitHub {
-          owner = "eclipse-pde";
-          repo = "eclipse.pde";
-          rev = "bc2f62c776dbccd0932249eda364865c1878c7e9";
-          sha256 = "sha256-E3tJPpDDsUahhk1pMpcWMhnfVrycWL1aFGoSULNa5tM=";
-        };
-
-        submodule_eclipse_platform = pkgs.fetchFromGitHub {
-          owner = "eclipse-platform";
-          repo = "eclipse.platform";
-          rev = "53c100e6cd6fb8fa1af3b101ed16f6c2bdbc6396";
-          sha256 = "sha256-Fhn4mEObjSUetwksUg46qjPU52d1En1T70bkTqWKRdo=";
-        };
-
-        submodule_eclipse_platform_swt = pkgs.fetchFromGitHub {
-          owner = "eclipse-platform";
-          repo = "eclipse.platform.swt";
-          rev = "e4890daf9d8aecbf37ba0e7562ca5066e33ebefd";
-          sha256 = "sha256-jI5ewA8mn7LhZgFDD6JvIhKq8n3Xz16jdVEEhOe4/NI=";
-        };
-
-        submodule_eclipse_platform_ui = pkgs.fetchFromGitHub {
-          owner = "eclipse-platform";
-          repo = "eclipse.platform.ui";
-          rev = "adf7f57615da873b6fbc094d98ccb5ff79ddd99d";
-          sha256 = "sha256-hXh535TU+rtqc27ollQL24nr/5V3O+0Z2zSe4tTtrGI=";
-        };
-
-        submodule_equinox = pkgs.fetchFromGitHub {
-          owner = "eclipse-equinox";
-          repo = "equinox";
-          rev = "ca95c426a7176f95f085f2f08c29f5cc338d9dcb";
-          sha256 = "sha256-42FNMB/w0NJsZlNLG/BQ54dyJiMQ1XIuOdO5ZbaOJtA=";
-        };
-
-        submodule_equinox_binaries = pkgs.fetchFromGitHub {
-          owner = "eclipse-equinox";
-          repo = "equinox.binaries";
-          rev = "a72c123aa956a8ad109f42b2094c9a8ad5212aa4";
-          sha256 = "sha256-P/jRGoUZc3r9kFi1pCWzpfoTqmnywQdwtxjGnapyLG8=";
-        };
-
-        submodule_equinox_p2 = pkgs.fetchFromGitHub {
-          owner = "eclipse-equinox";
-          repo = "p2";
-          rev = "1a09efdb39b2946efbacc281baaee76da8f1c323";
-          sha256 = "sha256-9FqDXLAfMRG2Wk2ejQ1ZEy2EX2PS+1uIfPc+wWyiHgk=";
-        };
-
-        # Combine main repo with all submodules
-        source = pkgs.runCommand "eclipse-platform-releng-aggregator-combined" {} ''
-          # Copy main repository
-          cp -r ${mainRepo} $out
-          chmod -R +w $out
-
-          # Copy each submodule to its designated path
-          cp -r ${submodule_eclipse_jdt} $out/eclipse.jdt
-          cp -r ${submodule_eclipse_jdt_core} $out/eclipse.jdt.core
-          cp -r ${submodule_eclipse_jdt_core_binaries} $out/eclipse.jdt.core.binaries
-          cp -r ${submodule_eclipse_jdt_debug} $out/eclipse.jdt.debug
-          cp -r ${submodule_eclipse_jdt_ui} $out/eclipse.jdt.ui
-          cp -r ${submodule_eclipse_jdt_ls} $out/eclipse.jdt.ls
-          cp -r ${submodule_eclipse_pde} $out/eclipse.pde
-          cp -r ${submodule_eclipse_platform} $out/eclipse.platform
-          cp -r ${submodule_eclipse_platform_swt} $out/eclipse.platform.swt
-          cp -r ${submodule_eclipse_platform_ui} $out/eclipse.platform.ui
-          cp -r ${submodule_equinox} $out/equinox
-          cp -r ${submodule_equinox_binaries} $out/equinox.binaries
-          cp -r ${submodule_equinox_p2} $out/equinox.p2
-        '';
 
         # ECJ build derivation
         ecj = pkgs.stdenv.mkDerivation {
@@ -808,6 +692,7 @@ SCRIPT_EOF
         };
 
         packages = {
+          source = source;
           ecj = ecj;
           eclipse = eclipse;
           jdtlsPatcher = jdtlsPatcher;
