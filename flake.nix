@@ -387,11 +387,12 @@ EOF
           dontFixup = true;
         };
 
-        # JDTLS VSCode patcher derivation
+        # JDTLS patcher derivation
         # This package extracts the JDTLS plugins from the eclipse build
-        # and creates a universal script to patch VSCode's Java extension
+        # and creates universal scripts to patch VSCode's or Cursor's Java extension
+        # Shared derivation that creates both binaries
         jdtlsPatcher = pkgs.stdenv.mkDerivation {
-          pname = "jdtls-vscode-patcher";
+          pname = "jdtls-patcher";
           version = "1.0.0";
 
           # Depend on eclipse build - it already builds JDTLS plugins
@@ -420,12 +421,17 @@ EOF
             mkdir -p $out/plugins
             cp -r $PLUGINS_SOURCE/* $out/plugins/
 
-            # Create the patching script
-            mkdir -p $out/bin
-            # Use a here-document with escaped variables for Nix
-            cat > $out/bin/patch-vscode-jdtls <<'SCRIPT_EOF'
+            # Create a function to generate the patching script for a specific editor
+            # Parameters: editor_name, editor_dirs (space-separated), editor_display_name
+            generate_patch_script() {
+              local editor_name="$1"
+              local editor_dirs="$2"
+              local editor_display_name="$3"
+              local script_name="$4"
+
+              cat > $out/bin/$script_name <<SCRIPT_EOF
 #!/usr/bin/env bash
-# Replace VSCode's JDTLS plugins with custom patched versions
+# Replace ''${editor_display_name}'s JDTLS plugins with custom patched versions
 # This replaces the actual JDTLS server files in the extension directory
 
 set -e
@@ -437,63 +443,63 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # Get the plugins directory from the nix store
-# This script is installed in $out/bin, so plugins are at $out/plugins
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PLUGINS_DIR="$(cd "$SCRIPT_DIR/../plugins" && pwd)"
+# This script is installed in \$out/bin, so plugins are at \$out/plugins
+SCRIPT_DIR="\$(cd "\$(dirname "\$0")" && pwd)"
+PLUGINS_DIR="\$(cd "\$SCRIPT_DIR/../plugins" && pwd)"
 
-echo -e "''${BLUE}=== Replacing JDTLS Plugins in VSCode Extension ===''${NC}\n"
+echo -e "\''${BLUE}=== Replacing JDTLS Plugins in ''${editor_display_name} Extension ===\''${NC}\n"
 
 # Check if custom plugins exist
-if [ ! -d "''${PLUGINS_DIR}" ]; then
-    echo -e "''${RED}Error: Custom JDTLS plugins not found at ''${PLUGINS_DIR}''${NC}"
+if [ ! -d "\''${PLUGINS_DIR}" ]; then
+    echo -e "\''${RED}Error: Custom JDTLS plugins not found at \''${PLUGINS_DIR}\''${NC}"
     exit 1
 fi
 
-# Find VSCode extension directory dynamically
+# Find ''${editor_display_name} extension directory dynamically
 # Try common locations for different operating systems
-VSCODE_PLUGINS_DIR=""
-VSCODE_EXT_DIR=""
+EDITOR_PLUGINS_DIR=""
+EDITOR_EXT_DIR=""
 
-if [[ "$OSTYPE" == "darwin"* ]]; then
+if [[ "\$OSTYPE" == "darwin"* ]]; then
     # macOS
-    for ext_base in "$HOME/.vscode/extensions" "$HOME/.vscode-insiders/extensions"; do
-        if [ -d "$ext_base" ]; then
-            java_exts=$(find "$ext_base" -maxdepth 1 -type d -name "redhat.java-*" 2>/dev/null | head -1)
-            if [ -n "$java_exts" ]; then
-                potential_plugins="$java_exts/server/plugins"
-                if [ -d "$potential_plugins" ]; then
-                    VSCODE_PLUGINS_DIR="$potential_plugins"
-                    VSCODE_EXT_DIR="$java_exts"
+    for ext_base in ''${editor_dirs}; do
+        if [ -d "\$ext_base" ]; then
+            java_exts=\$(find "\$ext_base" -maxdepth 1 -type d -name "redhat.java-*" 2>/dev/null | head -1)
+            if [ -n "\$java_exts" ]; then
+                potential_plugins="\$java_exts/server/plugins"
+                if [ -d "\$potential_plugins" ]; then
+                    EDITOR_PLUGINS_DIR="\$potential_plugins"
+                    EDITOR_EXT_DIR="\$java_exts"
                     break
                 fi
             fi
         fi
     done
-elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+elif [[ "\$OSTYPE" == "linux-gnu"* ]]; then
     # Linux
-    for ext_base in "$HOME/.vscode/extensions" "$HOME/.vscode-insiders/extensions"; do
-        if [ -d "$ext_base" ]; then
-            java_exts=$(find "$ext_base" -maxdepth 1 -type d -name "redhat.java-*" 2>/dev/null | head -1)
-            if [ -n "$java_exts" ]; then
-                potential_plugins="$java_exts/server/plugins"
-                if [ -d "$potential_plugins" ]; then
-                    VSCODE_PLUGINS_DIR="$potential_plugins"
-                    VSCODE_EXT_DIR="$java_exts"
+    for ext_base in ''${editor_dirs}; do
+        if [ -d "\$ext_base" ]; then
+            java_exts=\$(find "\$ext_base" -maxdepth 1 -type d -name "redhat.java-*" 2>/dev/null | head -1)
+            if [ -n "\$java_exts" ]; then
+                potential_plugins="\$java_exts/server/plugins"
+                if [ -d "\$potential_plugins" ]; then
+                    EDITOR_PLUGINS_DIR="\$potential_plugins"
+                    EDITOR_EXT_DIR="\$java_exts"
                     break
                 fi
             fi
         fi
     done
-elif [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" || "$OSTYPE" == "win32" ]]; then
+elif [[ "\$OSTYPE" == "msys" || "\$OSTYPE" == "cygwin" || "\$OSTYPE" == "win32" ]]; then
     # Windows
-    for ext_base in "$APPDATA/Code/User/extensions" "$APPDATA/Code - Insiders/User/extensions"; do
-        if [ -d "$ext_base" ]; then
-            java_exts=$(find "$ext_base" -maxdepth 1 -type d -name "redhat.java-*" 2>/dev/null | head -1)
-            if [ -n "$java_exts" ]; then
-                potential_plugins="$java_exts/server/plugins"
-                if [ -d "$potential_plugins" ]; then
-                    VSCODE_PLUGINS_DIR="$potential_plugins"
-                    VSCODE_EXT_DIR="$java_exts"
+    for ext_base in ''${editor_dirs}; do
+        if [ -d "\$ext_base" ]; then
+            java_exts=\$(find "\$ext_base" -maxdepth 1 -type d -name "redhat.java-*" 2>/dev/null | head -1)
+            if [ -n "\$java_exts" ]; then
+                potential_plugins="\$java_exts/server/plugins"
+                if [ -d "\$potential_plugins" ]; then
+                    EDITOR_PLUGINS_DIR="\$potential_plugins"
+                    EDITOR_EXT_DIR="\$java_exts"
                     break
                 fi
             fi
@@ -502,124 +508,136 @@ elif [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" || "$OSTYPE" == "win32" ]];
 fi
 
 # If not found, try to find it more broadly
-if [ -z "$VSCODE_PLUGINS_DIR" ]; then
+if [ -z "\$EDITOR_PLUGINS_DIR" ]; then
     # Search more broadly for redhat.java extensions
-    for search_dir in "$HOME/.vscode" "$HOME/.vscode-insiders" "$HOME/Library/Application Support/Code" "$HOME/.config/Code"; do
-        if [ -d "$search_dir" ]; then
-            found_ext=$(find "$search_dir" -type d -path "*/redhat.java-*/server/plugins" 2>/dev/null | head -1)
-            if [ -n "$found_ext" ]; then
-                VSCODE_PLUGINS_DIR="$found_ext"
-                VSCODE_EXT_DIR=$(dirname "$(dirname "$found_ext")")
+    for search_dir in ''${editor_dirs}; do
+        if [ -d "\$search_dir" ]; then
+            found_ext=\$(find "\$search_dir" -type d -path "*/redhat.java-*/server/plugins" 2>/dev/null | head -1)
+            if [ -n "\$found_ext" ]; then
+                EDITOR_PLUGINS_DIR="\$found_ext"
+                EDITOR_EXT_DIR=\$(dirname "\$(dirname "\$found_ext")")
                 break
             fi
         fi
     done
 fi
 
-if [ -z "''${VSCODE_PLUGINS_DIR}" ]; then
-    echo -e "''${RED}Error: VSCode Java extension not found''${NC}"
-    echo "Please install 'Extension Pack for Java' in VSCode"
+if [ -z "\''${EDITOR_PLUGINS_DIR}" ]; then
+    echo -e "\''${RED}Error: ''${editor_display_name} Java extension not found\''${NC}"
+    echo "Please install 'Extension Pack for Java' in ''${editor_display_name}"
     echo ""
-    echo "Searched in common VSCode extension directories."
+    echo "Searched in common ''${editor_display_name} extension directories."
     exit 1
 fi
 
-echo -e "''${GREEN}✓ Custom plugins found: ''${PLUGINS_DIR}''${NC}"
-echo -e "''${GREEN}✓ VSCode extension found: ''${VSCODE_EXT_DIR}''${NC}"
-echo -e "''${GREEN}✓ Plugins directory: ''${VSCODE_PLUGINS_DIR}''${NC}\n"
+echo -e "\''${GREEN}✓ Custom plugins found: \''${PLUGINS_DIR}\''${NC}"
+echo -e "\''${GREEN}✓ ''${editor_display_name} extension found: \''${EDITOR_EXT_DIR}\''${NC}"
+echo -e "\''${GREEN}✓ Plugins directory: \''${EDITOR_PLUGINS_DIR}\''${NC}\n"
 
 # Create backup
-BACKUP_DIR="''${VSCODE_PLUGINS_DIR}.backup.$(date +%Y%m%d_%H%M%S)"
-if [ ! -d "''${VSCODE_PLUGINS_DIR}.backup" ]; then
-    echo -e "''${BLUE}Creating backup of original plugins...''${NC}"
-    cp -r "''${VSCODE_PLUGINS_DIR}" "''${BACKUP_DIR}"
-    echo -e "''${GREEN}✓ Backup created: ''${BACKUP_DIR}''${NC}\n"
+BACKUP_DIR="\''${EDITOR_PLUGINS_DIR}.backup.\$(date +%Y%m%d_%H%M%S)"
+if [ ! -d "\''${EDITOR_PLUGINS_DIR}.backup" ]; then
+    echo -e "\''${BLUE}Creating backup of original plugins...\''${NC}"
+    cp -r "\''${EDITOR_PLUGINS_DIR}" "\''${BACKUP_DIR}"
+    echo -e "\''${GREEN}✓ Backup created: \''${BACKUP_DIR}\''${NC}\n"
 fi
 
 # Find all org.eclipse.jdt.core* plugins in custom build
-CUSTOM_CORE_PLUGINS=$(find "''${PLUGINS_DIR}" -name "org.eclipse.jdt.core*.jar" -type f)
+CUSTOM_CORE_PLUGINS=\$(find "\''${PLUGINS_DIR}" -name "org.eclipse.jdt.core*.jar" -type f)
 
-if [ -z "''${CUSTOM_CORE_PLUGINS}" ]; then
-    echo -e "''${RED}Error: No org.eclipse.jdt.core plugins found in custom build''${NC}"
+if [ -z "\''${CUSTOM_CORE_PLUGINS}" ]; then
+    echo -e "\''${RED}Error: No org.eclipse.jdt.core plugins found in custom build\''${NC}"
     exit 1
 fi
 
-echo -e "''${BLUE}Replacing JDTLS core plugins...''${NC}"
+echo -e "\''${BLUE}Replacing JDTLS core plugins...\''${NC}"
 
 # Replace each plugin by matching base name (ignoring version)
-for custom_plugin in ''${CUSTOM_CORE_PLUGINS}; do
+for custom_plugin in \''${CUSTOM_CORE_PLUGINS}; do
     # Extract plugin prefix (e.g., "org.eclipse.jdt.core" from "org.eclipse.jdt.core_3.42.0.v20250606-1600.jar")
-    plugin_prefix=$(basename "''${custom_plugin}" | sed 's/_[0-9].*//')
+    plugin_prefix=\$(basename "\''${custom_plugin}" | sed 's/_[0-9].*//')
 
-    # Find matching plugin in VSCode extension by prefix
-    vscode_plugin=$(find "''${VSCODE_PLUGINS_DIR}" -name "''${plugin_prefix}_*.jar" | head -1)
+    # Find matching plugin in ''${editor_display_name} extension by prefix
+    editor_plugin=\$(find "\''${EDITOR_PLUGINS_DIR}" -name "\''${plugin_prefix}_*.jar" | head -1)
 
-    if [ -n "''${vscode_plugin}" ]; then
-        vscode_name=$(basename "''${vscode_plugin}")
-        custom_name=$(basename "''${custom_plugin}")
-        echo "  Replacing: ''${vscode_name}"
-        echo "    With:     ''${custom_name}"
+    if [ -n "\''${editor_plugin}" ]; then
+        editor_name=\$(basename "\''${editor_plugin}")
+        custom_name=\$(basename "\''${custom_plugin}")
+        echo "  Replacing: \''${editor_name}"
+        echo "    With:     \''${custom_name}"
         # Backup original
-        if [ ! -f "''${vscode_plugin}.orig" ]; then
-            cp "''${vscode_plugin}" "''${vscode_plugin}.orig"
+        if [ ! -f "\''${editor_plugin}.orig" ]; then
+            cp "\''${editor_plugin}" "\''${editor_plugin}.orig"
         fi
-        # Replace with custom version (keep VSCode's filename to maintain references)
-        cp "''${custom_plugin}" "''${vscode_plugin}"
-        echo -e "    ''${GREEN}✓ Replaced''${NC}"
+        # Replace with custom version (keep ''${editor_display_name}'s filename to maintain references)
+        cp "\''${custom_plugin}" "\''${editor_plugin}"
+        echo -e "    \''${GREEN}✓ Replaced\''${NC}"
     else
-        echo -e "  ''${YELLOW}Warning: No matching plugin found for ''${plugin_prefix}''${NC}"
+        echo -e "  \''${YELLOW}Warning: No matching plugin found for \''${plugin_prefix}\''${NC}"
     fi
 done
 
 # Also replace the main JDTLS launcher and other critical plugins
 echo ""
-echo -e "''${BLUE}Replacing other critical JDTLS plugins...''${NC}"
+echo -e "\''${BLUE}Replacing other critical JDTLS plugins...\''${NC}"
 
 # Replace org.eclipse.jdt.ls.core if it exists
-CUSTOM_LS_CORE=$(find "''${PLUGINS_DIR}" -name "org.eclipse.jdt.ls.core*.jar" | head -1)
-if [ -n "''${CUSTOM_LS_CORE}" ]; then
-    VSCODE_LS_CORE=$(find "''${VSCODE_PLUGINS_DIR}" -name "org.eclipse.jdt.ls.core*.jar" | head -1)
-    if [ -n "''${VSCODE_LS_CORE}" ]; then
-        echo "  Replacing: $(basename "''${VSCODE_LS_CORE}")"
-        if [ ! -f "''${VSCODE_LS_CORE}.orig" ]; then
-            cp "''${VSCODE_LS_CORE}" "''${VSCODE_LS_CORE}.orig"
+CUSTOM_LS_CORE=\$(find "\''${PLUGINS_DIR}" -name "org.eclipse.jdt.ls.core*.jar" | head -1)
+if [ -n "\''${CUSTOM_LS_CORE}" ]; then
+    EDITOR_LS_CORE=\$(find "\''${EDITOR_PLUGINS_DIR}" -name "org.eclipse.jdt.ls.core*.jar" | head -1)
+    if [ -n "\''${EDITOR_LS_CORE}" ]; then
+        echo "  Replacing: \$(basename "\''${EDITOR_LS_CORE}")"
+        if [ ! -f "\''${EDITOR_LS_CORE}.orig" ]; then
+            cp "\''${EDITOR_LS_CORE}" "\''${EDITOR_LS_CORE}.orig"
         fi
-        cp "''${CUSTOM_LS_CORE}" "''${VSCODE_LS_CORE}"
-        echo -e "    ''${GREEN}✓ Replaced''${NC}"
+        cp "\''${CUSTOM_LS_CORE}" "\''${EDITOR_LS_CORE}"
+        echo -e "    \''${GREEN}✓ Replaced\''${NC}"
     fi
 fi
 
 # Replace equinox launcher if version differs
-CUSTOM_LAUNCHER=$(find "''${PLUGINS_DIR}" -name "org.eclipse.equinox.launcher_*.jar" | head -1)
-if [ -n "''${CUSTOM_LAUNCHER}" ]; then
-    VSCODE_LAUNCHER=$(find "''${VSCODE_PLUGINS_DIR}" -name "org.eclipse.equinox.launcher_*.jar" | head -1)
-    if [ -n "''${VSCODE_LAUNCHER}" ]; then
-        echo "  Replacing: $(basename "''${VSCODE_LAUNCHER}")"
-        if [ ! -f "''${VSCODE_LAUNCHER}.orig" ]; then
-            cp "''${VSCODE_LAUNCHER}" "''${VSCODE_LAUNCHER}.orig"
+CUSTOM_LAUNCHER=\$(find "\''${PLUGINS_DIR}" -name "org.eclipse.equinox.launcher_*.jar" | head -1)
+if [ -n "\''${CUSTOM_LAUNCHER}" ]; then
+    EDITOR_LAUNCHER=\$(find "\''${EDITOR_PLUGINS_DIR}" -name "org.eclipse.equinox.launcher_*.jar" | head -1)
+    if [ -n "\''${EDITOR_LAUNCHER}" ]; then
+        echo "  Replacing: \$(basename "\''${EDITOR_LAUNCHER}")"
+        if [ ! -f "\''${EDITOR_LAUNCHER}.orig" ]; then
+            cp "\''${EDITOR_LAUNCHER}" "\''${EDITOR_LAUNCHER}.orig"
         fi
-        cp "''${CUSTOM_LAUNCHER}" "''${VSCODE_LAUNCHER}"
-        echo -e "    ''${GREEN}✓ Replaced''${NC}"
+        cp "\''${CUSTOM_LAUNCHER}" "\''${EDITOR_LAUNCHER}"
+        echo -e "    \''${GREEN}✓ Replaced\''${NC}"
     fi
 fi
 
 echo ""
-echo -e "''${GREEN}=== Replacement Complete ===''${NC}\n"
+echo -e "\''${GREEN}=== Replacement Complete ===\''${NC}\n"
 echo "Next steps:"
-echo "1. Close VSCode completely"
-echo "2. Restart VSCode"
+echo "1. Close ''${editor_display_name} completely"
+echo "2. Restart ''${editor_display_name}"
 echo "3. Open a Java file with custom operators"
 echo "4. Check that red squiggles are gone"
 echo ""
-echo -e "''${YELLOW}Note:''${NC} You may need to run this script again if:"
-echo "- VSCode updates the Java extension"
+echo -e "\''${YELLOW}Note:\''${NC} You may need to run this script again if:"
+echo "- ''${editor_display_name} updates the Java extension"
 echo "- The extension gets reinstalled"
 SCRIPT_EOF
+              chmod +x $out/bin/$script_name
+            }
 
-            chmod +x $out/bin/patch-vscode-jdtls
+            # Create both binaries
+            mkdir -p $out/bin
 
-            # Create a symlink for convenience
-            ln -s $out/bin/patch-vscode-jdtls $out/patch-vscode-jdtls
+            # Generate patchJdtlsVsCode script
+            generate_patch_script "vscode" \
+              '"$HOME/.vscode/extensions" "$HOME/.vscode-insiders/extensions" "$HOME/Library/Application Support/Code/User/extensions" "$HOME/.config/Code/User/extensions" "$APPDATA/Code/User/extensions" "$APPDATA/Code - Insiders/User/extensions"' \
+              "VSCode" \
+              "patchJdtlsVsCode"
+
+            # Generate patchJdtlsCursor script
+            generate_patch_script "cursor" \
+              '"$HOME/.cursor/extensions" "$HOME/Library/Application Support/Cursor/User/extensions" "$HOME/.config/Cursor/User/extensions" "$APPDATA/Cursor/User/extensions"' \
+              "Cursor" \
+              "patchJdtlsCursor"
 
             runHook postInstall
           '';
