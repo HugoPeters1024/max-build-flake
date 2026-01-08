@@ -231,6 +231,7 @@
         eclipse = pkgs.stdenv.mkDerivation {
           pname = "eclipse-platform";
           version = "4.36.0-SNAPSHOT";
+          cores = 24;
 
           src = source;
 
@@ -361,14 +362,22 @@ EOF
                 $out/eclipse-sdk-linux-x86_64.tar.gz
             fi
 
-            # Install JDTLS plugins if they were built
-            JDTLS_PLUGINS_DIR="eclipse.jdt.ls/org.eclipse.jdt.ls.product/target/repository/plugins"
-            if [ -d "$JDTLS_PLUGINS_DIR" ]; then
-              echo "Installing JDTLS plugins..."
-              mkdir -p $out/jdtls-plugins
-              cp -r $JDTLS_PLUGINS_DIR/* $out/jdtls-plugins/
+            # Install JDTLS repository if it was built
+            JDTLS_REPO_DIR="eclipse.jdt.ls/org.eclipse.jdt.ls.product/target/repository"
+            if [ -d "$JDTLS_REPO_DIR" ]; then
+              echo "Installing JDTLS repository..."
+              # Copy full repository for jdtls binary
+              mkdir -p $out/jdtls-repository
+              cp -r $JDTLS_REPO_DIR/* $out/jdtls-repository/
+
+              # Also copy plugins separately for backward compatibility with jdtlsPatcher
+              JDTLS_PLUGINS_DIR="$JDTLS_REPO_DIR/plugins"
+              if [ -d "$JDTLS_PLUGINS_DIR" ]; then
+                mkdir -p $out/jdtls-plugins
+                cp -r $JDTLS_PLUGINS_DIR/* $out/jdtls-plugins/
+              fi
             else
-              echo "Warning: JDTLS plugins directory not found, skipping..."
+              echo "Warning: JDTLS repository directory not found, skipping..."
             fi
 
             runHook postInstall
@@ -541,10 +550,10 @@ echo -e "''${BLUE}Replacing JDTLS core plugins...''${NC}"
 for custom_plugin in ''${CUSTOM_CORE_PLUGINS}; do
     # Extract plugin prefix (e.g., "org.eclipse.jdt.core" from "org.eclipse.jdt.core_3.42.0.v20250606-1600.jar")
     plugin_prefix=$(basename "''${custom_plugin}" | sed 's/_[0-9].*//')
-    
+
     # Find matching plugin in VSCode extension by prefix
     vscode_plugin=$(find "''${VSCODE_PLUGINS_DIR}" -name "''${plugin_prefix}_*.jar" | head -1)
-    
+
     if [ -n "''${vscode_plugin}" ]; then
         vscode_name=$(basename "''${vscode_plugin}")
         custom_name=$(basename "''${custom_plugin}")
@@ -619,6 +628,130 @@ SCRIPT_EOF
           dontFixup = true;
         };
 
+        # JDTLS binary wrapper
+        # This package creates a jdtls binary that runs the custom JDTLS language server
+        jdtls = pkgs.stdenv.mkDerivation {
+          pname = "jdtls";
+          version = "1.0.0";
+
+          # Depend on eclipse build - it already builds JDTLS repository
+          buildInputs = [ eclipse jdk ];
+
+          # No build needed - we just create a wrapper script
+          dontUnpack = true;
+
+          installPhase = ''
+            runHook preInstall
+
+            # Extract JDTLS repository from eclipse build output
+            REPO_SOURCE="${eclipse}/jdtls-repository"
+
+            if [ ! -d "$REPO_SOURCE" ] || [ -z "$(ls -A $REPO_SOURCE 2>/dev/null)" ]; then
+              echo "Error: JDTLS repository not found in eclipse build output: $REPO_SOURCE"
+              echo "The eclipse build may not have successfully built JDTLS."
+              echo "Available in eclipse output:"
+              ls -la "${eclipse}" || true
+              exit 1
+            fi
+
+            echo "Found JDTLS repository in eclipse build: $REPO_SOURCE"
+
+            # Copy repository to output
+            mkdir -p $out/repository
+            cp -r $REPO_SOURCE/* $out/repository/
+
+            # Create the jdtls wrapper script
+            mkdir -p $out/bin
+            cat > $out/bin/jdtls <<'SCRIPT_EOF'
+#!/usr/bin/env bash
+# Script to run the built JDT Language Server
+# Usage: jdtls [data_directory]
+
+# Get the repository directory from the nix store
+REPO_DIR="$(cd "$(dirname "$0")/../repository" && pwd)"
+
+# Check if repository exists
+if [ ! -d "''${REPO_DIR}" ]; then
+    echo "Error: Repository not found at ''${REPO_DIR}"
+    exit 1
+fi
+
+# Find the equinox launcher jar
+LAUNCHER_JAR=$(find "''${REPO_DIR}/plugins" -name "org.eclipse.equinox.launcher_*.jar" | head -1)
+
+if [ -z "''${LAUNCHER_JAR}" ]; then
+    echo "Error: Equinox launcher jar not found in ''${REPO_DIR}/plugins"
+    exit 1
+fi
+
+# Detect OS and set source configuration directory (in Nix store)
+OS=$(uname -s)
+case "''${OS}" in
+    Linux*)
+        SOURCE_CONFIG_DIR="''${REPO_DIR}/config_linux"
+        ;;
+    Darwin*)
+        SOURCE_CONFIG_DIR="''${REPO_DIR}/config_mac"
+        ;;
+    MINGW*|MSYS*|CYGWIN*)
+        SOURCE_CONFIG_DIR="''${REPO_DIR}/config_win"
+        ;;
+    *)
+        echo "Warning: Unknown OS ''${OS}, using config_linux"
+        SOURCE_CONFIG_DIR="''${REPO_DIR}/config_linux"
+        ;;
+esac
+
+# Create a writable configuration directory in /tmp
+# Use a user-specific directory to avoid conflicts
+WRITABLE_CONFIG_DIR="/tmp/jdtls-config-''${USER:-nix}-$(basename "''${REPO_DIR}" | cut -d'-' -f1)"
+
+# Copy configuration from Nix store to writable location if needed
+if [ ! -d "''${WRITABLE_CONFIG_DIR}" ] || [ "''${SOURCE_CONFIG_DIR}" -nt "''${WRITABLE_CONFIG_DIR}" ]; then
+    mkdir -p "''${WRITABLE_CONFIG_DIR}"
+    # Copy all config files, preserving structure
+    if [ -d "''${SOURCE_CONFIG_DIR}" ]; then
+        cp -r "''${SOURCE_CONFIG_DIR}"/* "''${WRITABLE_CONFIG_DIR}/" 2>/dev/null || true
+    fi
+fi
+
+# Use the writable config directory
+CONFIG_DIR="''${WRITABLE_CONFIG_DIR}"
+
+# Set data directory (default to /tmp/jdtls-data if not provided)
+DATA_DIR="''${1:-/tmp/jdtls-data}"
+
+# Change to repository directory so relative paths work
+cd "''${REPO_DIR}"
+
+# Run the language server
+exec @java@/bin/java \
+  -Declipse.application=org.eclipse.jdt.ls.core.id1 \
+  -Dosgi.bundles.defaultStartLevel=4 \
+  -Declipse.product=org.eclipse.jdt.ls.core.product \
+  -Dlog.level=ALL \
+  -Xmx1G \
+  --add-modules=ALL-SYSTEM \
+  --add-opens java.base/java.util=ALL-UNNAMED \
+  --add-opens java.base/java.lang=ALL-UNNAMED \
+  -jar "''${LAUNCHER_JAR}" \
+  -configuration "''${CONFIG_DIR}" \
+  -data "''${DATA_DIR}"
+SCRIPT_EOF
+
+            # Substitute Java path in the script
+            substituteInPlace $out/bin/jdtls \
+              --subst-var-by java "${jdk}"
+
+            chmod +x $out/bin/jdtls
+
+            runHook postInstall
+          '';
+
+          # Don't fail if submodules aren't initialized (for local builds)
+          dontFixup = true;
+        };
+
       in
       {
         devShells.default = pkgs.mkShell {
@@ -643,6 +776,7 @@ SCRIPT_EOF
           ecj = ecj;
           eclipse = eclipse;
           jdtlsPatcher = jdtlsPatcher;
+          jdtls = jdtls;
           default = eclipse;
         };
       }
