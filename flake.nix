@@ -678,36 +678,6 @@ SCRIPT_EOF
             mkdir -p $out/repository
             cp -r $REPO_SOURCE/* $out/repository/
 
-            # Check if org.eclipse.osgi.compatibility.state plugin exists, if not create a minimal stub
-            if ! find "$out/repository/plugins" -name "org.eclipse.osgi.compatibility.state_*.jar" | grep -q .; then
-              echo "Creating minimal stub for missing org.eclipse.osgi.compatibility.state plugin..."
-              STUB_JAR="$out/repository/plugins/org.eclipse.osgi.compatibility.state_1.2.1200.v20260108-0928.jar"
-              STUB_DIR=$(mktemp -d)
-              mkdir -p "$STUB_DIR/META-INF"
-              # Create a minimal valid OSGi bundle manifest (no activator needed)
-              cat > "$STUB_DIR/META-INF/MANIFEST.MF" <<'MANIFEST_EOF'
-Manifest-Version: 1.0
-Bundle-ManifestVersion: 2
-Bundle-Name: OSGi Compatibility State
-Bundle-SymbolicName: org.eclipse.osgi.compatibility.state
-Bundle-Version: 1.2.1200.v20260108-0928
-MANIFEST_EOF
-              # Create minimal JAR with just the manifest
-              # jar should be in PATH since jdk is in buildInputs
-              (cd "$STUB_DIR" && jar cf "$STUB_JAR" META-INF/ 2>/dev/null || {
-                echo "Warning: Could not create stub JAR using jar command, trying alternative..." >&2
-                # Fallback: try using zip (JAR files are ZIP files)
-                if command -v zip >/dev/null 2>&1; then
-                  (cd "$STUB_DIR" && zip -q "$STUB_JAR" META-INF/MANIFEST.MF 2>/dev/null && echo "Created stub using zip")
-                else
-                  echo "Error: Neither jar nor zip available to create stub plugin" >&2
-                  exit 1
-                fi
-              })
-              rm -rf "$STUB_DIR"
-              echo "Created stub plugin: $STUB_JAR"
-            fi
-
             # Create the jdtls wrapper script
             mkdir -p $out/bin
             cat > $out/bin/jdtls <<'SCRIPT_EOF'
@@ -724,41 +694,34 @@ if [ ! -d "''${REPO_DIR}" ]; then
     exit 1
 fi
 
-# Ensure we have absolute paths first
-REPO_DIR_ABS="$(cd "''${REPO_DIR}" && pwd)"
-
-# Find the equinox launcher jar using absolute path
-LAUNCHER_JAR=$(find "''${REPO_DIR_ABS}/plugins" -name "org.eclipse.equinox.launcher_*.jar" | head -1)
+# Find the equinox launcher jar
+LAUNCHER_JAR=$(find "''${REPO_DIR}/plugins" -name "org.eclipse.equinox.launcher_*.jar" | head -1)
 
 if [ -z "''${LAUNCHER_JAR}" ]; then
-    echo "Error: Equinox launcher jar not found in ''${REPO_DIR_ABS}/plugins"
+    echo "Error: Equinox launcher jar not found in ''${REPO_DIR}/plugins"
     exit 1
 fi
-
-# Make launcher jar path absolute
-LAUNCHER_JAR="$(cd "$(dirname "''${LAUNCHER_JAR}")" && pwd)/$(basename "''${LAUNCHER_JAR}")"
 
 # Detect OS and set source configuration directory (in Nix store)
 OS=$(uname -s)
 case "''${OS}" in
     Linux*)
-        SOURCE_CONFIG_DIR="''${REPO_DIR_ABS}/config_linux"
+        SOURCE_CONFIG_DIR="''${REPO_DIR}/config_linux"
         ;;
     Darwin*)
-        SOURCE_CONFIG_DIR="''${REPO_DIR_ABS}/config_mac"
+        SOURCE_CONFIG_DIR="''${REPO_DIR}/config_mac"
         ;;
     MINGW*|MSYS*|CYGWIN*)
-        SOURCE_CONFIG_DIR="''${REPO_DIR_ABS}/config_win"
+        SOURCE_CONFIG_DIR="''${REPO_DIR}/config_win"
         ;;
     *)
         echo "Warning: Unknown OS ''${OS}, using config_linux"
-        SOURCE_CONFIG_DIR="''${REPO_DIR_ABS}/config_linux"
+        SOURCE_CONFIG_DIR="''${REPO_DIR}/config_linux"
         ;;
 esac
 
 # Create a writable configuration directory in /tmp
 # Use a user-specific directory to avoid conflicts
-# Note: REPO_DIR_ABS will be set below, but we need this here, so use REPO_DIR for the hash
 WRITABLE_CONFIG_DIR="/tmp/jdtls-config-''${USER:-nix}-$(basename "''${REPO_DIR}" | cut -d'-' -f1)"
 
 # Copy configuration from Nix store to writable location if needed
@@ -767,34 +730,14 @@ if [ ! -d "''${WRITABLE_CONFIG_DIR}" ] || [ "''${SOURCE_CONFIG_DIR}" -nt "''${WR
     # Copy all config files, preserving structure
     if [ -d "''${SOURCE_CONFIG_DIR}" ]; then
         cp -r "''${SOURCE_CONFIG_DIR}"/* "''${WRITABLE_CONFIG_DIR}/" 2>/dev/null || true
+        # Remove osgi.framework.extensions line if it references the missing compatibility state plugin
+        if [ -f "''${WRITABLE_CONFIG_DIR}/config.ini" ]; then
+            TMP_FILE="''${WRITABLE_CONFIG_DIR}/config.ini.tmp"
+            sed '/^osgi\.framework\.extensions=/d' "''${WRITABLE_CONFIG_DIR}/config.ini" > "''${TMP_FILE}" 2>/dev/null && \
+            mv "''${TMP_FILE}" "''${WRITABLE_CONFIG_DIR}/config.ini" 2>/dev/null || true
+        fi
     fi
 fi
-
-# Always clean up config.ini (even if directory wasn't recreated, to handle cached configs)
-# This ensures we remove problematic references every time the script runs
-if [ -f "''${WRITABLE_CONFIG_DIR}/config.ini" ]; then
-    TMP_FILE="''${WRITABLE_CONFIG_DIR}/config.ini.tmp"
-    # Remove osgi.framework.extensions line (causes issues with missing compatibility state plugin)
-    # Remove any lines referencing org.eclipse.osgi.compatibility.state
-    # Use awk to reliably handle the file (handles escaped characters better than grep)
-    awk '!/^osgi\.framework\.extensions=/ && !/org\.eclipse\.osgi\.compatibility\.state/' "''${WRITABLE_CONFIG_DIR}/config.ini" > "''${TMP_FILE}" 2>/dev/null
-    if [ -f "''${TMP_FILE}" ] && [ -s "''${TMP_FILE}" ]; then
-        mv "''${TMP_FILE}" "''${WRITABLE_CONFIG_DIR}/config.ini"
-    else
-        rm -f "''${TMP_FILE}"
-    fi
-fi
-
-# Remove references from any other .ini files
-find "''${WRITABLE_CONFIG_DIR}" -name "*.ini" -type f ! -name "config.ini" 2>/dev/null | while read ini_file; do
-    TMP_FILE="''${ini_file}.tmp"
-    awk '!/org\.eclipse\.osgi\.compatibility\.state/' "''${ini_file}" > "''${TMP_FILE}" 2>/dev/null
-    if [ -f "''${TMP_FILE}" ] && [ -s "''${TMP_FILE}" ]; then
-        mv "''${TMP_FILE}" "''${ini_file}"
-    else
-        rm -f "''${TMP_FILE}"
-    fi
-done
 
 # Use the writable config directory
 CONFIG_DIR="''${WRITABLE_CONFIG_DIR}"
@@ -802,76 +745,14 @@ CONFIG_DIR="''${WRITABLE_CONFIG_DIR}"
 # Set data directory (default to /tmp/jdtls-data if not provided)
 DATA_DIR="''${1:-/tmp/jdtls-data}"
 
-# Verify plugins directory exists
-PLUGINS_DIR_ABS="''${REPO_DIR_ABS}/plugins"
-if [ ! -d "''${PLUGINS_DIR_ABS}" ]; then
-    echo "Error: Plugins directory not found at ''${PLUGINS_DIR_ABS}"
-    exit 1
-fi
-
-# Verify critical plugins exist
-if [ ! -f "''${LAUNCHER_JAR}" ]; then
-    echo "Error: Launcher jar not found at ''${LAUNCHER_JAR}"
-    exit 1
-fi
-
-# Check for org.eclipse.osgi bundle (required for runtime)
-OSGI_BUNDLE=$(find "''${PLUGINS_DIR_ABS}" -name "org.eclipse.osgi_*.jar" | head -1)
-if [ -z "''${OSGI_BUNDLE}" ]; then
-    echo "Error: org.eclipse.osgi bundle not found in plugins directory - this is required!"
-    echo "Available plugins:"
-    ls "''${PLUGINS_DIR_ABS}" | head -20
-    exit 1
-fi
-
-# Check for org.eclipse.core.runtime bundle (contains EclipseStarter)
-CORE_RUNTIME_BUNDLE=$(find "''${PLUGINS_DIR_ABS}" -name "org.eclipse.core.runtime_*.jar" | head -1)
-if [ -z "''${CORE_RUNTIME_BUNDLE}" ]; then
-    echo "Error: org.eclipse.core.runtime bundle not found in plugins directory - this is required!"
-    echo "This bundle contains EclipseStarter class needed by the launcher."
-    echo "Available plugins:"
-    ls "''${PLUGINS_DIR_ABS}" | grep -E "(core|runtime|osgi)" | head -20
-    exit 1
-fi
-
-# Extract OSGi bundle name for osgi.bundles property
-OSGI_BUNDLE_NAME=$(basename "''${OSGI_BUNDLE}")
-OSGI_BUNDLE_NAME_NO_EXT="''${OSGI_BUNDLE_NAME%.jar}"
-
-# Debug output (can be removed later)
-if [ "''${JDTLS_DEBUG:-}" = "1" ]; then
-    echo "Debug: REPO_DIR_ABS=''${REPO_DIR_ABS}"
-    echo "Debug: PLUGINS_DIR_ABS=''${PLUGINS_DIR_ABS}"
-    echo "Debug: LAUNCHER_JAR=''${LAUNCHER_JAR}"
-    echo "Debug: OSGI_BUNDLE=''${OSGI_BUNDLE}"
-    echo "Debug: CONFIG_DIR=''${CONFIG_DIR}"
-    echo "Debug: DATA_DIR=''${DATA_DIR}"
-    echo "Debug: Current directory: $(pwd)"
-    echo "Debug: Plugins count: $(ls "''${PLUGINS_DIR_ABS}" | wc -l)"
-fi
-
 # Change to repository directory so relative paths work
-cd "''${REPO_DIR_ABS}"
+cd "''${REPO_DIR}"
 
-# Debug: Show config.ini contents if debug is enabled
-if [ "''${JDTLS_DEBUG:-}" = "1" ] && [ -f "''${CONFIG_DIR}/config.ini" ]; then
-    echo "Debug: config.ini contents:"
-    cat "''${CONFIG_DIR}/config.ini" | head -30
-    echo ""
-fi
-
-# Run the language server using -jar (standard Equinox launcher invocation)
-@java@/bin/java \
+# Run the language server
+exec @java@/bin/java \
   -Declipse.application=org.eclipse.jdt.ls.core.id1 \
   -Dosgi.bundles.defaultStartLevel=4 \
   -Declipse.product=org.eclipse.jdt.ls.core.product \
-  -Dosgi.install.area="file:''${REPO_DIR_ABS}/" \
-  -Dosgi.instance.area="file:''${DATA_DIR}/" \
-  -Dosgi.configuration.area="file:''${CONFIG_DIR}/" \
-  -Dosgi.checkConfiguration=false \
-  -Dosgi.compatibility.bootdelegation=true \
-  -Dosgi.ignoreExtension=true \
-  -Dosgi.framework.extensions= \
   -Dlog.level=ALL \
   -Xmx1G \
   --add-modules=ALL-SYSTEM \
@@ -879,24 +760,7 @@ fi
   --add-opens java.base/java.lang=ALL-UNNAMED \
   -jar "''${LAUNCHER_JAR}" \
   -configuration "''${CONFIG_DIR}" \
-  -data "''${DATA_DIR}" \
-  2>&1 || {
-    EXIT_CODE=$?
-    echo ""
-    echo "JDTLS failed with exit code $EXIT_CODE"
-    echo "Check the log file for details:"
-    # Find the most recent log file
-    LATEST_LOG=$(ls -t "''${CONFIG_DIR}"/*.log 2>/dev/null | head -1)
-    if [ -n "''${LATEST_LOG}" ] && [ -f "''${LATEST_LOG}" ]; then
-        echo "Log file: ''${LATEST_LOG}"
-        echo ""
-        echo "Last 50 lines of log:"
-        tail -50 "''${LATEST_LOG}"
-    else
-        echo "No log file found in ''${CONFIG_DIR}"
-    fi
-    exit $EXIT_CODE
-}
+  -data "''${DATA_DIR}"
 SCRIPT_EOF
 
             # Substitute Java path in the script
