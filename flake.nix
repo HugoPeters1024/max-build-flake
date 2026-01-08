@@ -685,8 +685,9 @@ SCRIPT_EOF
 # Script to run the built JDT Language Server
 # Usage: jdtls [data_directory]
 
-# Get the repository directory from the nix store
-REPO_DIR="$(cd "$(dirname "$0")/../repository" && pwd)"
+# Get the repository directory from the nix store (use absolute path)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(cd "''${SCRIPT_DIR}/../repository" && pwd)"
 
 # Check if repository exists
 if [ ! -d "''${REPO_DIR}" ]; then
@@ -694,13 +695,16 @@ if [ ! -d "''${REPO_DIR}" ]; then
     exit 1
 fi
 
-# Find the equinox launcher jar
+# Find the equinox launcher jar (use absolute path)
 LAUNCHER_JAR=$(find "''${REPO_DIR}/plugins" -name "org.eclipse.equinox.launcher_*.jar" | head -1)
 
 if [ -z "''${LAUNCHER_JAR}" ]; then
     echo "Error: Equinox launcher jar not found in ''${REPO_DIR}/plugins"
     exit 1
 fi
+
+# Make launcher jar path absolute
+LAUNCHER_JAR="$(cd "$(dirname "''${LAUNCHER_JAR}")" && pwd)/$(basename "''${LAUNCHER_JAR}")"
 
 # Detect OS and set source configuration directory (in Nix store)
 OS=$(uname -s)
@@ -730,13 +734,15 @@ if [ ! -d "''${WRITABLE_CONFIG_DIR}" ] || [ "''${SOURCE_CONFIG_DIR}" -nt "''${WR
     # Copy all config files, preserving structure
     if [ -d "''${SOURCE_CONFIG_DIR}" ]; then
         cp -r "''${SOURCE_CONFIG_DIR}"/* "''${WRITABLE_CONFIG_DIR}/" 2>/dev/null || true
-        # Remove osgi.framework.extensions line if it references the missing compatibility state plugin
-        if [ -f "''${WRITABLE_CONFIG_DIR}/config.ini" ]; then
-            TMP_FILE="''${WRITABLE_CONFIG_DIR}/config.ini.tmp"
-            sed '/^osgi\.framework\.extensions=/d' "''${WRITABLE_CONFIG_DIR}/config.ini" > "''${TMP_FILE}" 2>/dev/null && \
-            mv "''${TMP_FILE}" "''${WRITABLE_CONFIG_DIR}/config.ini" 2>/dev/null || true
-        fi
     fi
+fi
+
+# Always remove osgi.framework.extensions line (even if config wasn't just copied)
+# This ensures cached configs are also cleaned up
+if [ -f "''${WRITABLE_CONFIG_DIR}/config.ini" ]; then
+    TMP_FILE="''${WRITABLE_CONFIG_DIR}/config.ini.tmp"
+    sed '/^osgi\.framework\.extensions=/d' "''${WRITABLE_CONFIG_DIR}/config.ini" > "''${TMP_FILE}" 2>/dev/null && \
+    mv "''${TMP_FILE}" "''${WRITABLE_CONFIG_DIR}/config.ini" 2>/dev/null || true
 fi
 
 # Use the writable config directory
@@ -749,10 +755,12 @@ DATA_DIR="''${1:-/tmp/jdtls-data}"
 cd "''${REPO_DIR}"
 
 # Run the language server
+# Set osgi.install.area explicitly to ensure Equinox can find plugins
 exec @java@/bin/java \
   -Declipse.application=org.eclipse.jdt.ls.core.id1 \
   -Dosgi.bundles.defaultStartLevel=4 \
   -Declipse.product=org.eclipse.jdt.ls.core.product \
+  -Dosgi.install.area="''${REPO_DIR}" \
   -Dlog.level=ALL \
   -Xmx1G \
   --add-modules=ALL-SYSTEM \
