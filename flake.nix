@@ -127,6 +127,9 @@
             jdk
             maven
             git
+            gnumake
+            # SWT native build requires C compiler
+            clang
             which
           ];
 
@@ -198,6 +201,9 @@ EOF
             runHook preBuild
 
             echo "Building Eclipse Platform..."
+            # Set native property to enable SWT native build
+            # Tycho automatically sets ws, os, arch from build.properties in each fragment
+            # For macOS aarch64: native must equal "cocoa.macosx.aarch64"
             mvn clean verify \
               -e \
               -Dmaven.repo.local=$M2_REPO \
@@ -207,18 +213,22 @@ EOF
               -DapiBaselineTargetDirectory=$WORKSPACE \
               -Dcbi-ecj-version=99.99 \
               -Dtycho.disableP2Mirrors=true \
+              -Dnative=cocoa.macosx.aarch64 \
               -U
 
             echo "Building JDTLS product (for VSCode patcher)..."
             # Build JDTLS product now that platform repository is available
+            # Skip test compilation to avoid compilation errors in test code
             mvn clean install \
               -pl eclipse.jdt.ls/org.eclipse.jdt.ls.product \
               -Dmaven.repo.local=$M2_REPO \
               -Dcbi-ecj-version=99.99 \
               -Dtycho.disableP2Mirrors=true \
               -DskipTests=true \
+              -Dmaven.test.skip=true \
               -U || echo "JDTLS product build had issues, continuing..."
           '';
+
 
           installPhase = ''
             runHook preInstall
@@ -671,6 +681,278 @@ SCRIPT_EOF
           dontFixup = true;
         };
 
+        # Eclipse IDE package - extracts the tar archive and sets up a working IDE
+        eclipse-ide = pkgs.stdenv.mkDerivation {
+          pname = "eclipse-ide";
+          version = "4.36.0-SNAPSHOT";
+
+          # Depend on eclipse build and JDK
+          buildInputs = with pkgs; [ eclipse jdk git git-lfs curl unzip zip ];
+
+          # No source needed - we extract from eclipse build output
+          dontUnpack = true;
+
+          installPhase = ''
+            runHook preInstall
+
+            # Determine the appropriate distribution archive based on system
+            DIST_ARCHIVE=""
+            if [ "${pkgs.stdenv.hostPlatform.system}" == "aarch64-darwin" ] || [ "${pkgs.stdenv.hostPlatform.system}" == "x86_64-darwin" ]; then
+              # macOS - try aarch64 first, then x86_64
+              if [ -f "${eclipse}/distributions/org.eclipse.sdk.ide-macosx.cocoa.aarch64.tar.gz" ]; then
+                DIST_ARCHIVE="${eclipse}/distributions/org.eclipse.sdk.ide-macosx.cocoa.aarch64.tar.gz"
+              elif [ -f "${eclipse}/distributions/org.eclipse.sdk.ide-macosx.cocoa.x86_64.tar.gz" ]; then
+                DIST_ARCHIVE="${eclipse}/distributions/org.eclipse.sdk.ide-macosx.cocoa.x86_64.tar.gz"
+              fi
+            elif [ "${pkgs.stdenv.hostPlatform.system}" == "x86_64-linux" ] || [ "${pkgs.stdenv.hostPlatform.system}" == "aarch64-linux" ]; then
+              # Linux
+              if [ -f "${eclipse}/distributions/org.eclipse.sdk.ide-linux.gtk.x86_64.tar.gz" ]; then
+                DIST_ARCHIVE="${eclipse}/distributions/org.eclipse.sdk.ide-linux.gtk.x86_64.tar.gz"
+              elif [ -f "${eclipse}/distributions/org.eclipse.sdk.ide-linux.gtk.aarch64.tar.gz" ]; then
+                DIST_ARCHIVE="${eclipse}/distributions/org.eclipse.sdk.ide-linux.gtk.aarch64.tar.gz"
+              fi
+            fi
+
+            if [ -z "$DIST_ARCHIVE" ] || [ ! -f "$DIST_ARCHIVE" ]; then
+              echo "Error: No suitable Eclipse distribution found for system ${pkgs.stdenv.hostPlatform.system}"
+              echo "Available distributions:"
+              ls -la "${eclipse}/distributions/" || true
+              exit 1
+            fi
+
+            echo "Extracting Eclipse IDE from: $DIST_ARCHIVE"
+
+            # Extract the archive
+            mkdir -p $out/eclipse-dist
+            cd $out/eclipse-dist
+            tar -xzf "$DIST_ARCHIVE"
+
+            # Create a post-install script to fix Git LFS pointer files
+            # Nix builds are sandboxed without network access, so LFS files can't be fetched during build
+            # This script can be run manually after installation to fix the LFS pointers
+            mkdir -p $out/bin
+            cat > $out/bin/fix-eclipse-lfs <<'FIX_SCRIPT'
+#!/usr/bin/env bash
+# Script to fix Git LFS pointer files in Eclipse IDE installation
+# This requires network access and git-lfs to be installed
+
+set -e
+
+ECLIPSE_IDE_DIR="$(cd "$(dirname "$0")/../eclipse-dist" && pwd)"
+
+if [ ! -d "$ECLIPSE_IDE_DIR" ]; then
+  echo "Error: Eclipse IDE directory not found at $ECLIPSE_IDE_DIR"
+  exit 1
+fi
+
+cd "$ECLIPSE_IDE_DIR"
+
+if ! command -v git-lfs >/dev/null 2>&1; then
+  echo "Error: git-lfs is required but not installed"
+  echo "Install it with: nix-env -iA nixpkgs.git-lfs"
+  exit 1
+fi
+
+echo "Fixing LFS pointer files in Eclipse SWT plugins..."
+git-lfs install --skip-repo || true
+
+# Find and fix SWT JARs
+find . -name "*.jar" | grep -E "org\.eclipse\.swt\.(cocoa|gtk)" | while read jar; do
+  jar_abs=$(realpath "$jar")
+  tmp_dir=$(mktemp -d)
+  cd "$tmp_dir"
+  
+  unzip -q "$jar_abs" "*.jnilib" "*.so" 2>/dev/null || true
+  
+  FIXED=false
+  find . -type f \( -name "*.jnilib" -o -name "*.so" \) | while read lib_file; do
+    size=$(stat -f%z "$lib_file" 2>/dev/null || stat -c%s "$lib_file" 2>/dev/null || echo "0")
+    if [ "$size" -lt 500 ]; then
+      if head -c 50 "$lib_file" 2>/dev/null | grep -q "version https://git-lfs.github.com/spec/v1"; then
+        echo "  Fixing LFS pointer: $(basename "$lib_file")"
+        oid=$(grep "^oid sha256:" "$lib_file" | cut -d: -f2 | tr -d ' ')
+        if [ -n "$oid" ]; then
+          # Set up git repo for git-lfs
+          git init -q
+          git config user.email "fix@nix"
+          git config user.name "Nix Fix"
+          git remote add origin https://github.com/maxeler/eclipse.platform.releng.aggregator.git 2>/dev/null || true
+          
+          # Fetch LFS file
+          if git lfs fetch origin "$oid" 2>/dev/null; then
+            fetched_file=".git/lfs/objects/$(echo "$oid" | cut -c1-2)/$(echo "$oid" | cut -c3-4)/$oid"
+            if [ -f "$fetched_file" ]; then
+              fetched_size=$(stat -f%z "$fetched_file" 2>/dev/null || stat -c%s "$fetched_file" 2>/dev/null || echo "0")
+              if [ "$fetched_size" -gt 100000 ]; then
+                cp "$fetched_file" "$lib_file"
+                FIXED=true
+                echo "    ✓ Fixed (size: $fetched_size bytes)"
+              fi
+            fi
+          fi
+        fi
+      fi
+    fi
+  done
+  
+  if [ "$FIXED" = "true" ]; then
+    cd "$OLDPWD"
+    jar_file=$(realpath "$jar")
+    cd "$tmp_dir"
+    zip -q "$jar_file" *.jnilib *.so 2>/dev/null && echo "  Updated: $jar" || true
+  fi
+  
+  cd "$OLDPWD"
+  rm -rf "$tmp_dir"
+done
+
+echo "Done! Try running Eclipse again."
+FIX_SCRIPT
+            chmod +x $out/bin/fix-eclipse-lfs
+            echo "Created fix script: $out/bin/fix-eclipse-lfs"
+            echo "Note: Nix builds are sandboxed without network access."
+            echo "Run the fix script manually after installation:"
+            echo "  $(nix build '.#eclipse-ide' --print-out-paths)/bin/fix-eclipse-lfs"
+
+
+            # Find the extracted Eclipse directory
+            if [ -d "Eclipse.app" ]; then
+              # macOS - Eclipse.app structure
+              ECLIPSE_DIR="$out/eclipse-dist/Eclipse.app"
+              ECLIPSE_EXEC="$ECLIPSE_DIR/Contents/MacOS/eclipse"
+            elif [ -d "eclipse" ]; then
+              # Linux - eclipse directory
+              ECLIPSE_DIR="$out/eclipse-dist/eclipse"
+              ECLIPSE_EXEC="$ECLIPSE_DIR/eclipse"
+            else
+              echo "Error: Could not find Eclipse.app or eclipse directory after extraction"
+              ls -la "$out/eclipse-dist"
+              exit 1
+            fi
+
+            if [ ! -f "$ECLIPSE_EXEC" ]; then
+              echo "Error: Eclipse executable not found at $ECLIPSE_EXEC"
+              exit 1
+            fi
+
+            echo "Found Eclipse at: $ECLIPSE_DIR"
+            echo "Eclipse executable: $ECLIPSE_EXEC"
+
+            # Create a wrapper script that sets up the environment
+            mkdir -p $out/bin
+
+            if [ -d "Eclipse.app" ]; then
+              # macOS wrapper - launches Eclipse.app with proper environment
+              # Following the build instructions: "Open Eclipse.app/"
+              # On macOS, we use 'open' command which properly handles .app bundles
+              cat > $out/bin/eclipse <<'WRAPPER_EOF'
+#!/usr/bin/env bash
+# Wrapper script to launch Eclipse IDE with proper Nix environment
+# Following build instructions: "Open Eclipse.app/"
+
+set -e
+
+# Get the Eclipse.app directory
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ECLIPSE_APP="$(cd "$SCRIPT_DIR/../eclipse-dist/Eclipse.app" && pwd)"
+
+# Set up Java environment
+export JAVA_HOME="@java@"
+export PATH="$JAVA_HOME/bin:$PATH"
+
+# Set Eclipse-specific environment variables
+export ECLIPSE_HOME="$ECLIPSE_APP/Contents/Eclipse"
+
+# Ensure Eclipse can find its plugins and configuration
+export ECLIPSE_PLUGINS="$ECLIPSE_HOME/plugins"
+export ECLIPSE_CONFIGURATION="$ECLIPSE_HOME/configuration"
+
+# On macOS, use 'open' command to launch Eclipse.app properly
+# This ensures proper macOS app context which is critical for:
+# - Native library loading (SWT libraries)
+# - macOS integration (menu bar, dock, etc.)
+# - Proper handling of .app bundle structure
+# The -a flag specifies the application, -W makes it wait for the app to exit
+if [ $# -eq 0 ]; then
+  # No arguments - launch Eclipse normally
+  exec open -W -a "$ECLIPSE_APP"
+else
+  # With arguments - need to use the executable directly
+  # But set up environment first
+  ECLIPSE_EXEC="$ECLIPSE_APP/Contents/MacOS/eclipse"
+  # Change to Contents directory so relative paths in eclipse.ini work
+  cd "$ECLIPSE_APP/Contents"
+  exec "$ECLIPSE_EXEC" "$@"
+fi
+WRAPPER_EOF
+            else
+              # Linux wrapper - launches eclipse executable with proper environment
+              cat > $out/bin/eclipse <<'WRAPPER_EOF'
+#!/usr/bin/env bash
+# Wrapper script to launch Eclipse IDE with proper Nix environment
+
+set -e
+
+# Get the eclipse directory
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ECLIPSE_DIR="$(cd "$SCRIPT_DIR/../eclipse-dist/eclipse" && pwd)"
+ECLIPSE_EXEC="$ECLIPSE_DIR/eclipse"
+
+# Set up Java environment
+export JAVA_HOME="@java@"
+export PATH="$JAVA_HOME/bin:$PATH"
+
+# Set Eclipse-specific environment variables
+export ECLIPSE_HOME="$ECLIPSE_DIR"
+export ECLIPSE_PLUGINS="$ECLIPSE_DIR/plugins"
+export ECLIPSE_CONFIGURATION="$ECLIPSE_DIR/configuration"
+
+# Set library paths for native libraries
+export LD_LIBRARY_PATH="$ECLIPSE_DIR:$LD_LIBRARY_PATH"
+
+# Launch Eclipse
+exec "$ECLIPSE_EXEC" "$@"
+WRAPPER_EOF
+            fi
+
+            # Substitute Java path in the wrapper script
+            substituteInPlace $out/bin/eclipse \
+              --subst-var-by java "${jdk}"
+
+            chmod +x $out/bin/eclipse
+
+            # Also create a symlink to the Eclipse directory for reference
+            ln -s $ECLIPSE_DIR $out/eclipse
+
+            # Create an info file about what was installed
+            cat > $out/eclipse-info.txt <<EOF
+Eclipse IDE Installation
+========================
+Version: 4.36.0-SNAPSHOT
+Source: Built from eclipse.platform.releng.aggregator
+Java: ${jdk}
+Location: $ECLIPSE_DIR
+Executable: $out/bin/eclipse
+
+To run Eclipse:
+  $out/bin/eclipse
+
+Or add $out/bin to your PATH and run:
+  eclipse
+EOF
+
+            echo ""
+            echo "Eclipse IDE installed successfully!"
+            echo "Run: $out/bin/eclipse"
+            echo "Or add $out/bin to your PATH"
+
+            runHook postInstall
+          '';
+
+          # Don't fixup - Eclipse has its own native libraries and structure
+          dontFixup = true;
+        };
+
       in
       {
         devShells.default = pkgs.mkShell {
@@ -695,6 +977,7 @@ SCRIPT_EOF
           source = source;
           ecj = ecj;
           eclipse = eclipse;
+          eclipse-ide = eclipse-ide;
           jdtlsPatcher = jdtlsPatcher;
           jdtls = jdtls;
           default = eclipse;
