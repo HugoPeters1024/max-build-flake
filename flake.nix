@@ -111,6 +111,15 @@
           dontFixup = true;
         };
 
+        # Map Nix system to Eclipse native property format
+        # Format: ws.os.arch (e.g., cocoa.macosx.aarch64)
+        nativeProperty = {
+          "aarch64-darwin" = "cocoa.macosx.aarch64";
+          "x86_64-darwin" = "cocoa.macosx.x86_64";
+          "x86_64-linux" = "gtk.linux.x86_64";
+          "aarch64-linux" = "gtk.linux.aarch64";
+        }.${system} or "gtk.linux.x86_64";
+
         # Eclipse build derivation
         eclipse = pkgs.stdenv.mkDerivation {
           pname = "eclipse-platform";
@@ -203,17 +212,21 @@ EOF
             echo "Building Eclipse Platform..."
             # Set native property to enable SWT native build
             # Tycho automatically sets ws, os, arch from build.properties in each fragment
-            # For macOS aarch64: native must equal "cocoa.macosx.aarch64"
+            # Native property format: ws.os.arch (e.g., cocoa.macosx.aarch64)
+            echo "Building for system: ${pkgs.stdenv.hostPlatform.system}"
+            echo "Using native property: ${nativeProperty}"
+            # Use single-threaded build to avoid ConcurrentModificationException in Tycho
+            # The validate-classpath goal has concurrency issues with parallel builds
             mvn clean verify \
               -e \
               -Dmaven.repo.local=$M2_REPO \
-              -T 1C \
+              -T 1 \
               -DskipTests=true \
               -Dcompare-version-with-baselines.skip=true \
               -DapiBaselineTargetDirectory=$WORKSPACE \
               -Dcbi-ecj-version=99.99 \
               -Dtycho.disableP2Mirrors=true \
-              -Dnative=cocoa.macosx.aarch64 \
+              -Dnative=${nativeProperty} \
               -U
 
             echo "Building JDTLS product (for VSCode patcher)..."
